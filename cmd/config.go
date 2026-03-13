@@ -25,6 +25,7 @@ import (
 
 	"github.com/dustin/go-humanize"
 	"github.com/juicedata/juicefs/pkg/meta"
+	"github.com/juicedata/juicefs/pkg/object"
 	"github.com/juicedata/juicefs/pkg/utils"
 	"github.com/juicedata/juicefs/pkg/version"
 	"github.com/pkg/errors"
@@ -292,6 +293,26 @@ func config(ctx *cli.Context) error {
 			format.KerbConf = readKerbConf(ctx.String(flag))
 			format.MinClientVersion = "1.4.0-A"
 			clientVer = true
+		case "tier-id":
+			newSc := ctx.String("tier-sc")
+			newTierId := uint8(ctx.Uint(flag))
+			oldTier, ok := format.Tier[newTierId]
+			if ok && oldTier.Sc != newSc {
+				fmt.Printf("existing tier will be overwrite: %s=>%s\n", oldTier.GetHumanSc(), newSc)
+				fmt.Printf("please confirm to continue: y/n ")
+				var confirm string
+				fmt.Scanln(&confirm)
+				if confirm != "y" {
+					fmt.Println("aborted")
+					return nil
+				}
+			}
+			format.Tier[newTierId] = object.Tier{
+				ID: newTierId,
+				Sc: newSc,
+			}
+			msg.WriteString(fmt.Sprintf("set tier %d -> %s\n", newTierId, newSc))
+			err = m.Init(format, false)
 		}
 	}
 	if msg.Len() == 0 {

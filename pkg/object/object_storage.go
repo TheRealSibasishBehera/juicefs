@@ -27,8 +27,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/goccy/go-json"
 	"github.com/juicedata/juicefs/pkg/utils"
 )
 
@@ -328,15 +330,104 @@ func TmpFilePath(parent, name string) string {
 
 type ctxKey string
 
-const StorageClassKey ctxKey = "storageClass"
+const TierKey ctxKey = "tier"
 
-func getScStr(ctx context.Context, mountSc string) string {
-	var scStr string
-	if mountSc != "" {
-		scStr = mountSc
-	}
-	if sc, ok := ctx.Value(StorageClassKey).(string); ok {
-		scStr = sc
+type SupportTier interface {
+	SetTier(init TierIdx)
+	getScStr(ctx context.Context) string
+}
+
+type baseStorage struct {
+	sc string
+	tierInfo
+}
+
+func (b *baseStorage) getScStr(ctx context.Context) string {
+	scStr := b.sc
+	if id, ok := ctx.Value(TierKey).(uint8); ok {
+		scStr, ok = b.tierInfo.GetSc(id)
+		if !ok {
+			logger.Warnf("invalid tier id: %d", id)
+		}
 	}
 	return scStr
+}
+
+func (b *baseStorage) SetTier(init TierIdx) {
+	if init == nil {
+		init = TierIdx{}
+	}
+	b.tierInfo.Store(cloneTierIdx(init))
+}
+
+type Tier struct {
+	ID uint8  `json:"ID"`
+	Sc string `json:"StorageClass"`
+}
+
+func (t Tier) GetHumanSc() string {
+	if t.ID == 0 {
+		return "default"
+	}
+	return t.Sc
+}
+
+type tierAlias Tier
+
+func (t *Tier) UnmarshalJSON(data []byte) error {
+	var aux tierAlias
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*t = Tier(aux)
+	if t.ID == 0 {
+		t.Sc = ""
+	}
+	return nil
+}
+
+func (t Tier) MarshalJSON() ([]byte, error) {
+	aux := tierAlias(t)
+	if aux.ID == 0 {
+		aux.Sc = "default"
+	}
+	return json.Marshal(aux)
+}
+
+type TierIdx map[uint8]Tier
+
+func (t TierIdx) GetID(sc string) (uint8, bool) {
+	for k, v := range t {
+		if v.Sc == sc {
+			return k, true
+		}
+	}
+	return 0, false
+}
+
+func (t TierIdx) GetSc(id uint8) (string, bool) {
+	tInfo, ok := t[id]
+	return tInfo.Sc, ok
+}
+
+func cloneTierIdx(src TierIdx) TierIdx {
+	dst := make(TierIdx, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+type tierInfo atomic.Value
+
+func (t *tierInfo) GetSc(id uint8) (string, bool) {
+	m := (*atomic.Value)(t).Load().(TierIdx)
+	return m.GetSc(id)
+}
+
+func (t *tierInfo) Store(idx TierIdx) {
+	if idx == nil {
+		idx = TierIdx{}
+	}
+	(*atomic.Value)(t).Store(cloneTierIdx(idx))
 }

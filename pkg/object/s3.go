@@ -48,10 +48,10 @@ const awsDefaultRegion = "us-east-1"
 const s3RequestIDKey = "X-Amz-Request-Id"
 
 type s3client struct {
+	baseStorage
 	s3              *s3.Client
 	bucket          string
 	region          string
-	sc              string
 	disableChecksum bool
 }
 
@@ -153,7 +153,7 @@ func (s *s3client) Get(ctx context.Context, key string, off, limit int64, getter
 }
 
 func (s *s3client) Put(ctx context.Context, key string, in io.Reader, getters ...AttrGetter) error {
-	sc := getScStr(ctx, s.sc)
+	sc := s.getScStr(ctx)
 	var body io.ReadSeeker
 	if b, ok := in.(io.ReadSeeker); ok {
 		body = b
@@ -194,7 +194,7 @@ func (s *s3client) Put(ctx context.Context, key string, in io.Reader, getters ..
 }
 
 func (s *s3client) Copy(ctx context.Context, dst, src string) error {
-	sc := getScStr(ctx, s.sc)
+	sc := s.getScStr(ctx)
 	src = s.bucket + "/" + src
 	params := &s3.CopyObjectInput{
 		Bucket:       &s.bucket,

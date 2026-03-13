@@ -29,6 +29,19 @@ type withPrefix struct {
 	prefix string
 }
 
+func (s *withPrefix) SetTier(init TierIdx) {
+	if o, ok := s.os.(SupportTier); ok {
+		o.SetTier(init)
+	}
+}
+
+func (s *withPrefix) getScStr(ctx context.Context) string {
+	if o, ok := s.os.(SupportTier); ok {
+		return o.getScStr(ctx)
+	}
+	return ""
+}
+
 // WithPrefix return an object storage that add a prefix to keys.
 func WithPrefix(os ObjectStorage, prefix string) ObjectStorage {
 	return &withPrefix{os, prefix}

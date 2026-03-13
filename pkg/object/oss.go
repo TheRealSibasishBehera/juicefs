@@ -42,7 +42,7 @@ const ossDefaultRegionID = "cn-hangzhou"
 type ossClient struct {
 	client *oss.Client
 	bucket string
-	sc     string
+	baseStorage
 }
 
 func (o *ossClient) String() string {
@@ -132,7 +132,7 @@ func (o *ossClient) Get(ctx context.Context, key string, off, limit int64, gette
 }
 
 func (o *ossClient) Put(ctx context.Context, key string, in io.Reader, getters ...AttrGetter) error {
-	sc := getScStr(ctx, o.sc)
+	sc := o.getScStr(ctx)
 	req := &oss.PutObjectRequest{
 		Bucket:       &o.bucket,
 		Key:          &key,
@@ -171,7 +171,7 @@ func (o *ossClient) Restore(ctx context.Context, key string) error {
 }
 
 func (o *ossClient) Copy(ctx context.Context, dst, src string) error {
-	sc := getScStr(ctx, o.sc)
+	sc := o.getScStr(ctx)
 	var req = &oss.CopyObjectRequest{
 		SourceBucket: &o.bucket,
 		Bucket:       &o.bucket,

@@ -88,6 +88,23 @@ func (s *sharded) SetStorageClass(sc string) error {
 	return err
 }
 
+func (s *sharded) SetTier(init TierIdx) {
+	for _, o := range s.stores {
+		if o, ok := o.(SupportTier); ok {
+			o.SetTier(init)
+		}
+	}
+}
+
+func (s *sharded) getScStr(ctx context.Context) string {
+	for _, o := range s.stores {
+		if o, ok := o.(SupportTier); ok {
+			return o.getScStr(ctx)
+		}
+	}
+	return ""
+}
+
 const maxResults = 10000
 
 // ListAll lists all keys that starts at marker from object storage.
