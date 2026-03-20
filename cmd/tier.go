@@ -19,6 +19,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/juicedata/juicefs/pkg/meta"
@@ -98,6 +99,9 @@ func listTier(ctx *cli.Context) error {
 	for id, t := range format.Tier {
 		results = append(results, []string{fmt.Sprintf("%d", id), t.GetHumanSc()})
 	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i][0] < results[j][0]
+	})
 	printResult(results, 1, false)
 	return nil
 
