@@ -43,6 +43,7 @@ type DumpedCounters struct {
 	NextSession       int64 `json:"nextSession"`
 	NextTrash         int64 `json:"nextTrash"`
 	NextCleanupSlices int64 `json:"nextCleanupSlices,omitempty"` // deprecated, always 0
+	LastChangelog     int64 `json:"lastChangelog,omitempty"`     // deprecated, always 0
 }
 
 type DumpedDelFile struct {
@@ -125,6 +126,11 @@ type DumpedEntry struct {
 	Entries    map[string]*DumpedEntry `json:"entries,omitempty"`
 	AccessACL  *DumpedACL              `json:"posix_acl_access,omitempty"`
 	DefaultACL *DumpedACL              `json:"posix_acl_default,omitempty"`
+}
+
+type DumpedChangeLog struct {
+	Version int64  `json:"version"`
+	Entry   string `json:"entry"`
 }
 
 type wrapEntryPool struct {

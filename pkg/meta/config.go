@@ -103,6 +103,7 @@ type Format struct {
 	EnableACL        bool
 	RangerRestUrl    string `json:",omitempty"`
 	RangerService    string `json:",omitempty"`
+	ChangeLog        bool   `json:",omitempty"`
 
 	//kerberos
 	KerbConf string `json:",omitempty"`

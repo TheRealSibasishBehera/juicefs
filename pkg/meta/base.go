@@ -272,6 +272,7 @@ type baseMeta struct {
 	txlocks      [nlocks]sync.Mutex // Pessimistic locks to reduce conflict
 	subTrash     internalNode
 	sid          uint64
+	nextTxnId    uint64
 	of           *openfiles
 	removedFiles map[Ino]bool
 	compacting   map[uint64]bool
@@ -609,6 +610,14 @@ func (m *baseMeta) timeit(method string, start time.Time) {
 
 func (m *baseMeta) getBase() *baseMeta {
 	return m
+}
+
+func (m *baseMeta) getTxnId() uint64 {
+	return atomic.AddUint64(&m.nextTxnId, 1)
+}
+
+func (m *baseMeta) ScanChangelog(ctx Context, last int64, handler func(ver int64, entry string) error) error {
+	return nil
 }
 
 func (m *baseMeta) checkRoot(inode Ino) Ino {

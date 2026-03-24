@@ -263,6 +263,11 @@ type userGroupQuota struct {
 	UsedInodes int64  `xorm:"notnull"`
 }
 
+type changeLog struct {
+	Id    int64  `xorm:"pk bigserial"`
+	Entry string `xorm:"notnull"`
+}
+
 type dbMeta struct {
 	*baseMeta
 	db    *xorm.Engine
@@ -1008,6 +1013,41 @@ func mustInsert(s *xorm.Session, beans ...interface{}) error {
 		}
 	}
 	return nil
+}
+
+func (m *dbMeta) genLog(ctx Context, s *xorm.Session, ns int64, op string, args ...any) {
+	if !m.fmt.ChangeLog {
+		return
+	}
+	op = fmt.Sprintf(op, args...)
+	log := fmt.Sprintf("%d.%09d|%s|(%d,%d)", ns/1e9, ns%1e9, op, m.sid, m.getTxnId())
+	_ = mustInsert(s, &changeLog{Entry: log})
+}
+
+func (m *dbMeta) ScanChangelog(ctx Context, last int64, handler func(ver int64, entry string) error) error {
+	if last == 0 {
+		// TODO:  get last log
+		logger.Infof("last version is %d", last)
+	}
+	for {
+		var logs []changeLog
+		err := m.roTxn(ctx, func(s *xorm.Session) error {
+			return s.Where("id > ?", last).Asc("id").Limit(1000).Find(&logs)
+		})
+		if err != nil {
+			logger.Errorf("scan changelog: %s", err)
+			time.Sleep(time.Second)
+		}
+		for _, log := range logs {
+			if err := handler(log.Id, log.Entry); err != nil {
+				return err
+			}
+			last = log.Id
+		}
+		if len(logs) == 0 {
+			time.Sleep(time.Millisecond * 100)
+		}
+	}
 }
 
 var errBusy error
@@ -1945,6 +1985,7 @@ func (m *dbMeta) doUnlink(ctx Context, parent Ino, name string, attr *Attr, skip
 				}
 			}
 		}
+		m.genLog(ctx, s, now, "UNLINK(%d,%s,%d,%t,%t):%d", parent, name, trash, opened, updateParent, n.Inode)
 		return err
 	})
 	if err == nil && trash == 0 {
@@ -2074,6 +2115,7 @@ func (m *dbMeta) doRmdir(ctx Context, parent Ino, name string, pinode *Ino, attr
 		if !parent.IsTrash() {
 			_, err = s.SetExpr("nlink", "nlink - 1").Cols("nlink", "mtime", "ctime", "mtimensec", "ctimensec").Update(&pn, &node{Inode: pn.Inode})
 		}
+		m.genLog(ctx, s, now, "RMDIR(%d,%s):%d", parent, name, n.Inode)
 		return err
 	})
 	if err == nil && trash == 0 {

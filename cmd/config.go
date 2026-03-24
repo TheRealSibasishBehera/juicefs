@@ -93,6 +93,10 @@ func configManagementFlags() []cli.Flag {
 			Name:  "user-group-quota",
 			Usage: "enable user and group quota management",
 		},
+		&cli.BoolFlag{
+			Name:  "changelog",
+			Usage: "enable changelog",
+		},
 	})
 }
 
@@ -237,6 +241,11 @@ func config(ctx *cli.Context) error {
 			if new := ctx.Bool(flag); new != format.DirStats {
 				msg.WriteString(fmt.Sprintf("%10s: %t -> %t\n", flag, format.DirStats, new))
 				format.DirStats = new
+			}
+		case "changelog":
+			if new := ctx.Bool(flag); new != format.ChangeLog {
+				msg.WriteString(fmt.Sprintf("%10s: %t -> %t\n", flag, format.ChangeLog, new))
+				format.ChangeLog = new
 			}
 		case "user-group-quota":
 			if new := ctx.Bool(flag); new != format.UserGroupQuota {
