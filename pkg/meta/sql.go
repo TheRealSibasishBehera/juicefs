@@ -4697,7 +4697,6 @@ func (m *dbMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fast, 
 			sessions = append(sessions, &DumpedSustained{k, v})
 		}
 
-		// 导出目录配额
 		var dirQuotaRows []dirQuota
 		if err := s.Find(&dirQuotaRows); err != nil {
 			return err
@@ -4707,7 +4706,6 @@ func (m *dbMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fast, 
 			dirQuotas[Ino(q.Inode)] = &DumpedQuota{MaxSpace: q.MaxSpace, MaxInodes: q.MaxInodes, UsedSpace: q.UsedSpace, UsedInodes: q.UsedInodes}
 		}
 
-		// 导出用户配额
 		var userQuotaRows []userGroupQuota
 		if err := s.Where("qtype = ?", UserQuotaType).Find(&userQuotaRows); err != nil {
 			return err
@@ -4717,7 +4715,6 @@ func (m *dbMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fast, 
 			userQuotas[q.Qkey] = &DumpedQuota{MaxSpace: q.MaxSpace, MaxInodes: q.MaxInodes, UsedSpace: q.UsedSpace, UsedInodes: q.UsedInodes}
 		}
 
-		// 导出组配额
 		var groupQuotaRows []userGroupQuota
 		if err := s.Where("qtype = ?", GroupQuotaType).Find(&groupQuotaRows); err != nil {
 			return err

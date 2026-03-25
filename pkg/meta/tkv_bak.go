@@ -409,7 +409,6 @@ func (m *kvMeta) dumpQuota(ctx Context, opt *DumpOption, ch chan<- *dumpedResult
 	return m.txn(ctx, func(tx *kvTxn) error {
 		quotas := make([]*pb.Quota, 0, 128)
 
-		// 导出目录配额
 		tx.scan(m.fmtKey("QD"), nextKey(m.fmtKey("QD")), false, func(k, v []byte) bool {
 			q := &pb.Quota{}
 			q.Inode = uint64(m.decodeInode([]byte(k)[2:])) // 兼容旧 reader
@@ -424,7 +423,6 @@ func (m *kvMeta) dumpQuota(ctx Context, opt *DumpOption, ch chan<- *dumpedResult
 			return true
 		})
 
-		// 导出用户配额
 		tx.scan(m.fmtKey("QU"), nextKey(m.fmtKey("QU")), false, func(k, v []byte) bool {
 			q := &pb.Quota{}
 			q.Type = uint32(UserQuotaType)
@@ -438,7 +436,6 @@ func (m *kvMeta) dumpQuota(ctx Context, opt *DumpOption, ch chan<- *dumpedResult
 			return true
 		})
 
-		// 导出组配额
 		tx.scan(m.fmtKey("QG"), nextKey(m.fmtKey("QG")), false, func(k, v []byte) bool {
 			q := &pb.Quota{}
 			q.Type = uint32(GroupQuotaType)
@@ -451,7 +448,6 @@ func (m *kvMeta) dumpQuota(ctx Context, opt *DumpOption, ch chan<- *dumpedResult
 			quotas = append(quotas, q)
 			return true
 		})
-
 		return dumpResult(ctx, ch, &dumpedResult{msg: &pb.Batch{Quotas: quotas}})
 	})
 }
@@ -599,7 +595,6 @@ func (m *kvMeta) loadQuota(ctx Context, msg proto.Message, pairs *[]*pair) {
 		b.Put64(uint64(q.UsedInodes))
 
 		var key []byte
-		// 兼容旧备份：旧格式只有 inode 字段
 		if q.Type == 0 && q.Key == 0 {
 			key = m.dirQuotaKey(Ino(q.Inode))
 		} else {

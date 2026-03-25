@@ -180,7 +180,6 @@ func checkMeta(t *testing.T, m Meta) {
 		t.Fatalf("expected: %v, but got: %v", expectedQuota, *quota)
 	}
 
-	// 检查用户配额
 	userQuota, err := m.(engine).doGetQuota(ctx, UserQuotaType, 501)
 	if err != nil {
 		t.Fatalf("get user quota: %s", err)
@@ -197,7 +196,6 @@ func checkMeta(t *testing.T, m Meta) {
 			expectedUserQuota.MaxSpace, expectedUserQuota.MaxInodes, userQuota.MaxSpace, userQuota.MaxInodes)
 	}
 
-	// 检查组配额
 	groupQuota, err := m.(engine).doGetQuota(ctx, GroupQuotaType, 20)
 	if err != nil {
 		t.Fatalf("get group quota: %s", err)

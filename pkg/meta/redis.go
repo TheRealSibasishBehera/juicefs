@@ -4677,7 +4677,6 @@ func (m *redisMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fas
 			sessions = append(sessions, &DumpedSustained{sid, inodes})
 		}
 	}
-	// 导出目录配额
 	dirQuotas := make(map[Ino]*DumpedQuota)
 	for k, v := range m.rdb.HGetAll(ctx, m.dirQuotaKey()).Val() {
 		inode, err := strconv.ParseUint(k, 10, 64)
@@ -4694,7 +4693,6 @@ func (m *redisMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fas
 		dirQuotas[Ino(inode)] = &quota
 	}
 
-	// 导出用户配额
 	userQuotas := make(map[uint64]*DumpedQuota)
 	for k, v := range m.rdb.HGetAll(ctx, m.userQuotaKey()).Val() {
 		uid, err := strconv.ParseUint(k, 10, 64)
@@ -4711,7 +4709,6 @@ func (m *redisMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fas
 		userQuotas[uid] = &quota
 	}
 
-	// 导出组配额
 	groupQuotas := make(map[uint64]*DumpedQuota)
 	for k, v := range m.rdb.HGetAll(ctx, m.groupQuotaKey()).Val() {
 		gid, err := strconv.ParseUint(k, 10, 64)
@@ -4933,8 +4930,6 @@ func (m *redisMeta) LoadMeta(r io.Reader) (err error) {
 		return err
 	}
 	m.loadDumpedQuotas(ctx, dm.Quotas, dm.UserQuotas, dm.GroupQuotas)
-	// 当前 JSON 格式不导出 UsedSpace/UsedInodes（字段 tag 为 `json:"-"`），
-	// 导入后需要重建 user/group used 值
 	if len(dm.UserQuotas) > 0 || len(dm.GroupQuotas) > 0 {
 		if err := m.ScanUserGroupUsage(ctx); err != nil {
 			logger.Warnf("rebuild user/group quota usage failed: %v", err)

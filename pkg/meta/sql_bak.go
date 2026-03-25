@@ -424,7 +424,6 @@ func (m *dbMeta) dumpXattr(ctx Context, opt *DumpOption, ch chan<- *dumpedResult
 func (m *dbMeta) dumpQuota(ctx Context, opt *DumpOption, ch chan<- *dumpedResult) error {
 	quotas := make([]*pb.Quota, 0, 128)
 
-	// 导出目录配额
 	var dirRows []dirQuota
 	if err := m.execTxn(ctx, func(s *xorm.Session) error {
 		return s.Find(&dirRows)
@@ -443,7 +442,6 @@ func (m *dbMeta) dumpQuota(ctx Context, opt *DumpOption, ch chan<- *dumpedResult
 		})
 	}
 
-	// 导出用户配额
 	var userRows []userGroupQuota
 	if err := m.execTxn(ctx, func(s *xorm.Session) error {
 		return s.Where("qtype = ?", UserQuotaType).Find(&userRows)
@@ -461,7 +459,6 @@ func (m *dbMeta) dumpQuota(ctx Context, opt *DumpOption, ch chan<- *dumpedResult
 		})
 	}
 
-	// 导出组配额
 	var groupRows []userGroupQuota
 	if err := m.execTxn(ctx, func(s *xorm.Session) error {
 		return s.Where("qtype = ?", GroupQuotaType).Find(&groupRows)
@@ -764,7 +761,6 @@ func (m *dbMeta) loadQuota(ctx Context, msg proto.Message) error {
 	groupRows := make([]interface{}, 0, len(quotas))
 
 	for _, q := range quotas {
-		// 兼容旧备份：旧格式只有 inode 字段
 		if q.Type == 0 && q.Key == 0 {
 			dirRows = append(dirRows, &dirQuota{
 				Inode:      Ino(q.Inode),
