@@ -860,7 +860,7 @@ func (m *kvMeta) ScanChangelog(ctx Context, last int64, handler func(ver int64, 
 		// TODO:  get last log
 		logger.Infof("last version is %d", last)
 	}
-	saw := make(map[int64]uint32)
+	saw := make(map[uint64]uint32)
 	end := m.logKey(^uint64(0))
 	for {
 		err := m.client.simpleTxn(context.Background(), func(kt *kvTxn) error {
@@ -868,12 +868,11 @@ func (m *kvMeta) ScanChangelog(ctx Context, last int64, handler func(ver int64, 
 			begin := m.logKey(m.client.rewind(uint64(last)))
 			now := uint32(time.Now().Unix())
 			kt.scan(begin, end, false, func(k, v []byte) bool {
-				binary.LittleEndian.Uint64(k)                    // for validation
-				id, _ := strconv.ParseInt(string(k[3:]), 10, 64) // "txn"
+				id := binary.BigEndian.Uint64(k[3:]) // "LOG"
 				if saw[id] == 0 {
 					saw[id] = now
-					last = id
-					if e := handler(id, string(v)); e != nil {
+					last = int64(id)
+					if e := handler(int64(id), string(v)); e != nil {
 						logger.Errorf("Handle changelog %d: %s", id, e)
 						err = e
 						return false
@@ -4443,6 +4442,7 @@ func (m *kvMeta) loadDumpedACLs(ctx Context) error {
 			tx.set(m.aclKey(id), rule.Encode())
 		}
 		tx.set(m.counterKey(aclCounter), packCounter(int64(maxId)))
+		// FIXME
 		m.genLog(tx, time.Now(), "LOADDUMPEDACLS(%d)", maxId)
 		return nil
 	})
@@ -4474,7 +4474,7 @@ func (m *kvMeta) doUpdateToken(ctx Context, id uint32, token []byte) syscall.Err
 }
 
 func (m *kvMeta) doLoadToken(ctx Context, id uint32) (token []byte, st syscall.Errno) {
-	err := m.txn(ctx, func(tx *kvTxn) error {
+	err := m.txn(ctx, func(tx *kvTxn) error { // TODO: simpletxn
 		token = tx.get(m.krbTokenKey(id))
 		if token == nil {
 			return syscall.ENOENT
