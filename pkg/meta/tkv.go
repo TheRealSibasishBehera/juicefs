@@ -29,6 +29,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,6 +53,7 @@ type kvtxn interface {
 	append(key []byte, value []byte)
 	incrBy(key []byte, value int64) int64
 	delete(key []byte)
+	id() uint64
 }
 
 type tkvClient interface {
@@ -63,6 +65,7 @@ type tkvClient interface {
 	close() error
 	shouldRetry(err error) bool
 	gc()
+	rewind(id uint64) uint64 // rewind id of log
 	config(key string) interface{}
 }
 
@@ -198,6 +201,7 @@ All keys:
   QDiiiiiiii         directory quota
   Raaaa			     POSIX acl
   KDaaaa			 delegation token
+  LOGiiiiiiii        changelog
 */
 
 func (m *kvMeta) inodeKey(inode Ino) []byte {
@@ -274,6 +278,10 @@ func (m *kvMeta) aclKey(id uint32) []byte {
 
 func (m *kvMeta) krbTokenKey(id uint32) []byte {
 	return m.fmtKey("KD", id)
+}
+
+func (m *kvMeta) logKey(id uint64) []byte {
+	return m.fmtKey("LOG", id)
 }
 
 func (m *kvMeta) parseACLId(key string) uint32 {
@@ -604,7 +612,9 @@ func (m *kvMeta) doRefreshSession() error {
 			logger.Warnf("Session %d was stale and cleaned up, but now it comes back again", m.sid)
 			tx.set(m.sessionInfoKey(m.sid), m.newSessionInfo())
 		}
-		tx.set(m.sessionKey(m.sid), m.packInt64(m.expireTime()))
+		expire := m.expireTime()
+		tx.set(m.sessionKey(m.sid), m.packInt64(expire))
+		m.genLog(tx, time.Now(), "SESSIONREFRESH(%d)", m.sid, expire)
 		return nil
 	})
 }
@@ -831,6 +841,62 @@ func (m *kvMeta) ListSessions() ([]*Session, error) {
 	return sessions, nil
 }
 
+func (m *kvMeta) genLog(tx *kvTxn, ts time.Time, op string, args ...any) {
+	if !m.fmt.ChangeLog {
+		return
+	}
+	id := tx.id()
+	if id == 0 {
+		return
+	}
+	op = fmt.Sprintf(op, args...)
+	ns := ts.UnixNano()
+	log := fmt.Sprintf("%d.%09d|%s|(%d,%d)", ns/1e9, ns%1e9, op, m.sid, m.getTxnId())
+	tx.set(m.logKey(id), []byte(log))
+}
+
+func (m *kvMeta) ScanChangelog(ctx Context, last int64, handler func(ver int64, entry string) error) error {
+	if last == 0 {
+		// TODO:  get last log
+		logger.Infof("last version is %d", last)
+	}
+	saw := make(map[int64]uint32)
+	end := m.logKey(^uint64(0))
+	for {
+		err := m.client.simpleTxn(context.Background(), func(kt *kvTxn) error {
+			var err error
+			begin := m.logKey(m.client.rewind(uint64(last)))
+			now := uint32(time.Now().Unix())
+			kt.scan(begin, end, false, func(k, v []byte) bool {
+				binary.LittleEndian.Uint64(k)                    // for validation
+				id, _ := strconv.ParseInt(string(k[3:]), 10, 64) // "txn"
+				if saw[id] == 0 {
+					saw[id] = now
+					last = id
+					if e := handler(id, string(v)); e != nil {
+						logger.Errorf("Handle changelog %d: %s", id, e)
+						err = e
+						return false
+					}
+				}
+				return true
+			})
+			return err
+		}, 0)
+		if err != nil {
+			logger.Errorf("Scan changelog: %s", err)
+			return err
+		}
+		now := uint32(time.Now().Unix())
+		for k, t := range saw {
+			if t+60 < now {
+				delete(saw, k)
+			}
+		}
+		time.Sleep(time.Second)
+	}
+}
+
 func (m *kvMeta) shouldRetry(err error) bool {
 	return m.client.shouldRetry(err)
 }
@@ -874,6 +940,7 @@ func (m *kvMeta) txn(ctx Context, f func(tx *kvTxn) error, inodes ...Ino) error 
 func (m *kvMeta) setValue(key, value []byte) error {
 	return m.txn(Background(), func(tx *kvTxn) error {
 		tx.set(key, value)
+		m.genLog(tx, time.Now(), "SET(%s,%s)", key, value)
 		return nil
 	})
 }
@@ -1051,6 +1118,7 @@ func (m *kvMeta) doTruncate(ctx Context, inode Ino, flags uint8, length uint64, 
 		t.Ctimensec = uint32(now.Nanosecond())
 		tx.set(m.inodeKey(inode), m.marshal(&t))
 		*attr = t
+		m.genLog(tx, now, "TRUNCATE(%d,%d,%d)", inode, length, flags)
 		return nil
 	}, inode))
 }
@@ -1114,6 +1182,7 @@ func (m *kvMeta) doFallocate(ctx Context, inode Ino, mode uint8, off uint64, siz
 			}
 		}
 		*attr = t
+		m.genLog(tx, now, "FALLOCATE(%d,%d,%d,%d)", inode, off, size, mode)
 		return nil
 	}, inode))
 }
@@ -1147,6 +1216,7 @@ func (m *kvMeta) doReadlink(ctx Context, inode Ino, noatime bool) (atime int64, 
 		attr.Atimensec = uint32(now.Nanosecond())
 		atime = now.UnixNano()
 		tx.set(m.inodeKey(inode), m.marshal(attr))
+		m.genLog(tx, now, "ACCESS(%d)", inode)
 		return nil
 	}, inode)
 	return
@@ -1288,6 +1358,7 @@ func (m *kvMeta) doMknod(ctx Context, parent Ino, name string, _type uint8, mode
 		if _type == TypeDirectory {
 			tx.set(m.dirStatKey(*inode), m.packDirStat(&dirStat{}))
 		}
+		m.genLog(tx, now, "CREATE(%d,%s,%d,%d,%d,%v,%t):%d", parent, name, ctx.Uid(), ctx.Gid(), mode, ctx.Value(CtxKey("behavior")), updateParent, *inode)
 		return nil
 	}, parent))
 }
@@ -1423,6 +1494,7 @@ func (m *kvMeta) doUnlink(ctx Context, parent Ino, name string, attr *Attr, skip
 				tx.deleteKeys(m.fmtKey("A", inode, "P"))
 			}
 		}
+		m.genLog(tx, now, "UNLINK(%d,%s,%d,%t,%t):%d", parent, name, trash, opened, updateParent, inode)
 		return nil
 	}, parent)
 	if err == nil && trash == 0 {
@@ -1698,6 +1770,13 @@ func (m *kvMeta) doBatchUnlink(ctx Context, parent Ino, entries []*Entry, delta 
 			if updateParent {
 				tx.set(m.inodeKey(parent), m.marshal(&pattr))
 			}
+			if len(entryInfos) > 0 {
+				names := make([]string, 0, len(entryInfos))
+				for _, info := range entryInfos {
+					names = append(names, info.name)
+				}
+				m.genLog(tx, now, "UNLINKBATCH(%d,%s,%d,%t):%d", parent, strings.Join(names, ","), trash, updateParent, len(entryInfos))
+			}
 
 			return nil
 		}, parent)
@@ -1816,6 +1895,7 @@ func (m *kvMeta) doRmdir(ctx Context, parent Ino, name string, pinode *Ino, oldA
 			tx.delete(m.inodeKey(inode))
 			tx.deleteKeys(m.xattrKey(inode, ""))
 		}
+		m.genLog(tx, now, "RMDIR(%d,%s,%d,%t):%d", parent, name, trash, !parent.IsTrash(), inode)
 		return nil
 	}, parent)
 	if err == nil && trash == 0 {
@@ -2086,6 +2166,7 @@ func (m *kvMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 		if dupdate {
 			tx.set(m.inodeKey(parentDst), m.marshal(&dattr))
 		}
+		m.genLog(tx, now, "MOVE(%d,%s,%d,%s,%d,%t):%d", parentSrc, nameSrc, parentDst, nameDst, dino, !parentSrc.IsTrash(), ino)
 		return nil
 	}, parentLocks...)
 	if err == nil && !exchange && trash == 0 {
@@ -2156,6 +2237,7 @@ func (m *kvMeta) doLink(ctx Context, inode, parent Ino, name string, attr *Attr)
 		if attr != nil {
 			*attr = iattr
 		}
+		m.genLog(tx, now, "LINK(%d,%d,%s):%d", inode, parent, name, iattr.Nlink)
 		return nil
 	}, parent))
 }
@@ -2337,6 +2419,7 @@ func (m *kvMeta) doWrite(ctx Context, inode Ino, indx uint32, off uint32, slice 
 		tx.set(m.inodeKey(inode), m.marshal(attr))
 		tx.set(m.chunkKey(inode, indx), val)
 		*numSlices = len(val) / sliceBytes
+		m.genLog(tx, now, "WRITE(%d,%d,%d,%d,%d):%d", inode, indx, off, slice.Id, slice.Len, *numSlices)
 		return nil
 	}, inode))
 }
@@ -2464,6 +2547,7 @@ func (m *kvMeta) CopyFileRange(ctx Context, fin Ino, offIn uint64, fout Ino, off
 			tx.append([]byte(k), v)
 		}
 		tx.set(m.inodeKey(fout), m.marshal(&attr))
+		m.genLog(tx, now, "COPYFILE(%d,%d,%d,%d,%d):%d", fin, offIn, fout, offOut, size, attr.Length)
 		if copied != nil {
 			*copied = size
 		}
@@ -2520,6 +2604,7 @@ func (m *kvMeta) doSyncDirStat(ctx Context, ino Ino) (*dirStat, syscall.Errno) {
 			return syscall.ENOENT
 		}
 		tx.set(m.dirStatKey(ino), m.packDirStat(stat))
+		m.genLog(tx, time.Now(), "DIRSTAT(%d):(%d,%d,%d)", ino, stat.length, stat.space, stat.inodes)
 		return nil
 	}, 0)
 	if err != nil && m.shouldRetry(err) {
@@ -2648,6 +2733,7 @@ func (m *kvMeta) deleteChunk(inode Ino, indx uint32) error {
 				todel = append(todel, s)
 			}
 		}
+		m.genLog(tx, time.Now(), "DELCHUNK(%d,%d)", inode, indx)
 		return nil
 	}, inode)
 	if err != nil {
@@ -2666,6 +2752,7 @@ func (m *kvMeta) cleanupZeroRef(id uint64, size uint32) {
 			return syscall.EINVAL
 		}
 		tx.delete(m.sliceKey(id, size))
+		m.genLog(tx, time.Now(), "CLEANUP_ZERO_REF(%s)", m.sliceKey(id, size))
 		return nil
 	})
 }
@@ -2729,6 +2816,7 @@ func (m *kvMeta) doCleanupDelayedSlices(ctx Context, edge int64) (int, error) {
 					rs = append(rs, tx.incrBy(m.sliceKey(s.Id, s.Size), -1))
 				}
 				tx.delete(key)
+				m.genLog(tx, time.Now(), "CLEANUP_DELAYED_SLICES(%q)", key)
 				return nil
 			}); err != nil {
 				logger.Warnf("Cleanup delayed slices %q: %s", key, err)
@@ -2774,6 +2862,7 @@ func (m *kvMeta) doCompactChunk(inode Ino, indx uint32, buf []byte, ss []*slice,
 				}
 			}
 		}
+		m.genLog(tx, time.Now(), "COMPACTCHUNK(%d,%d,%d,%d,%d,%d)", inode, indx, len(ss), skipped, id, size)
 		return nil
 	}, inode)) // less conflicts with `write`
 	// there could be false-negative that the compaction is successful, double-check
@@ -2916,6 +3005,7 @@ func (m *kvMeta) scanTrashSlices(ctx Context, scan trashSliceScan) error {
 					rs = append(rs, tx.incrBy(m.sliceKey(s.Id, s.Size), -1))
 				}
 				tx.delete(key)
+				m.genLog(tx, time.Now(), "CLEANUP_TRASH_SLICES(%q)", key)
 			}
 			return nil
 		})
@@ -3002,6 +3092,7 @@ func (m *kvMeta) doRepair(ctx Context, inode Ino, attr *Attr) syscall.Errno {
 			return true
 		})
 		tx.set(m.inodeKey(inode), m.marshal(attr))
+		m.genLog(tx, time.Now(), "REPAIR(%d)", inode)
 		return nil
 	}, inode))
 }
@@ -3079,6 +3170,7 @@ func (m *kvMeta) doRemoveXattr(ctx Context, inode Ino, name string) syscall.Errn
 			return ENOATTR
 		}
 		tx.delete(key)
+		m.genLog(tx, time.Now(), "REMOVEXATTR(%d,%s)", inode, name)
 		return nil
 	}))
 }
@@ -3155,6 +3247,7 @@ func (m *kvMeta) doSetQuota(ctx Context, qtype uint32, key uint64, quota *Quota)
 			origin.UsedInodes = quota.UsedInodes
 		}
 		tx.set(quotaKey, m.packQuota(origin))
+		m.genLog(tx, time.Now(), "SETQUOTA(%d,%d,%d,%d)", qtype, key, origin.MaxSpace, origin.MaxInodes)
 		return nil
 	})
 	return created, err
@@ -3179,6 +3272,7 @@ func (m *kvMeta) doDelQuota(ctx Context, qtype uint32, key uint64) error {
 		quota.MaxInodes = -1
 		return m.txn(ctx, func(tx *kvTxn) error {
 			tx.set(quotaKey, m.packQuota(quota))
+			m.genLog(tx, time.Now(), "DELQUOTA(%d,%d)", qtype, key)
 			return nil
 		})
 	} else {
@@ -3215,7 +3309,7 @@ func (m *kvMeta) doLoadQuotas(ctx Context) (map[uint64]*Quota, map[uint64]*Quota
 				} else {
 					id = binary.BigEndian.Uint64([]byte(k[2:])) // skip prefix
 				}
-				quotas[id] =  m.parseQuota(v)
+				quotas[id] = m.parseQuota(v)
 			}
 		}
 		quotaMaps[i] = quotas
@@ -4083,6 +4177,7 @@ func (m *kvMeta) doCloneEntry(ctx Context, srcIno Ino, parent Ino, name string, 
 		case TypeSymlink:
 			tx.set(m.symKey(ino), tx.get(m.symKey(srcIno)))
 		}
+		m.genLog(tx, time.Now(), "CLONE(%d,%d)", srcIno, ino)
 		return nil
 	}, srcIno))
 }
@@ -4117,6 +4212,7 @@ func (m *kvMeta) doCleanupDetachedNode(ctx Context, ino Ino) syscall.Errno {
 		tx.deleteKeys(m.xattrKey(ino, ""))
 		tx.delete(m.dirStatKey(ino))
 		tx.delete(m.detachedKey(ino))
+		m.genLog(tx, time.Now(), "CLEANUP(%d)", ino)
 		return nil
 	}, ino))
 }
@@ -4156,6 +4252,7 @@ func (m *kvMeta) doAttachDirNode(ctx Context, parent Ino, inode Ino, name string
 		tx.set(m.inodeKey(parent), m.marshal(&pattr))
 		tx.set(m.entryKey(parent, name), m.packEntry(TypeDirectory, inode))
 		tx.delete(m.detachedKey(inode))
+		m.genLog(tx, now, "ATTACH(%d,%d,%s)", inode, parent, name)
 		return nil
 	}, parent))
 }
@@ -4175,6 +4272,7 @@ func (m *kvMeta) doTouchAtime(ctx Context, inode Ino, attr *Attr, now time.Time)
 		attr.Atimensec = uint32(now.Nanosecond())
 		tx.set(m.inodeKey(inode), m.marshal(attr))
 		updated = true
+		m.genLog(tx, now, "ACCESS(%d)", inode)
 		return nil
 	}, inode)
 	return updated, err
@@ -4345,6 +4443,7 @@ func (m *kvMeta) loadDumpedACLs(ctx Context) error {
 			tx.set(m.aclKey(id), rule.Encode())
 		}
 		tx.set(m.counterKey(aclCounter), packCounter(int64(maxId)))
+		m.genLog(tx, time.Now(), "LOADDUMPEDACLS(%d)", maxId)
 		return nil
 	})
 }
@@ -4357,6 +4456,7 @@ func (m *kvMeta) doStoreToken(ctx Context, token []byte) (id uint32, st syscall.
 		}
 		tx.set(m.krbTokenKey(uint32(newId)), token)
 		id = uint32(newId)
+		m.genLog(tx, time.Now(), "STORETOKEN(%d,%s)", id, string(token))
 		return nil
 	})
 	return id, errno(err)
@@ -4368,6 +4468,7 @@ func (m *kvMeta) doUpdateToken(ctx Context, id uint32, token []byte) syscall.Err
 			return syscall.ENOENT
 		}
 		tx.set(m.krbTokenKey(id), token)
+		m.genLog(tx, time.Now(), "UPDATETOKEN(%d,%s)", id, string(token))
 		return nil
 	}))
 }
@@ -4388,6 +4489,11 @@ func (m *kvMeta) doDeleteTokens(ctx Context, ids []uint32) syscall.Errno {
 		for _, id := range ids {
 			tx.delete(m.krbTokenKey(id))
 		}
+		strIds := make([]string, len(ids))
+		for i, id := range ids {
+			strIds[i] = strconv.FormatUint(uint64(id), 10)
+		}
+		m.genLog(tx, time.Now(), "DELETETOKENS(%v)", strIds)
 		return nil
 	}))
 }

@@ -1539,6 +1539,7 @@ func (m *dbMeta) doTruncate(ctx Context, inode Ino, flags uint8, length uint64, 
 			return err
 		}
 		m.parseAttr(&nodeAttr, attr)
+		m.genLog(ctx, s, now, "TRUNCATE(%d,%d,%d)", inode, length, flags)
 		return nil
 	}, inode))
 }
@@ -1609,6 +1610,7 @@ func (m *dbMeta) doFallocate(ctx Context, inode Ino, mode uint8, off uint64, siz
 			}
 		}
 		m.parseAttr(&nodeAttr, attr)
+		m.genLog(ctx, s, now, "FALLOCATE(%d,%d,%d,%d)", inode, off, size, mode)
 		return nil
 	}, inode))
 }
@@ -1656,6 +1658,7 @@ func (m *dbMeta) doReadlink(ctx Context, inode Ino, noatime bool) (atime int64, 
 		}
 		nodeAttr.setAtime(now.UnixNano())
 		atime = now.UnixNano()
+		m.genLog(ctx, s, now.UnixNano(), "ACCESS(%d)", inode)
 		_, e = s.Cols("atime", "atimensec").Update(&nodeAttr, &node{Inode: inode})
 		return e
 	}, inode)
@@ -1823,6 +1826,7 @@ func (m *dbMeta) doMknod(ctx Context, parent Ino, name string, _type uint8, mode
 			}
 		}
 		m.parseAttr(&n, attr)
+		m.genLog(ctx, s, now, "CREATE(%d,%s,%d,%d,%d,%v,%t):%d", parent, name, ctx.Uid(), ctx.Gid(), mode, ctx.Value(CtxKey("behavior")), updateParent, *inode)
 		return nil
 	}))
 }
@@ -2500,6 +2504,7 @@ func (m *dbMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 				}
 			}
 		}
+		m.genLog(ctx, s, now, "MOVE(%d,%s,%d,%s,%d,%t):%d", parentSrc, nameSrc, parentDst, nameDst, dino, !parentSrc.IsTrash(), se.Inode)
 		return err
 	}, parentLocks...)
 	if err == nil && !exchange && trash == 0 {
@@ -2592,6 +2597,7 @@ func (m *dbMeta) doLink(ctx Context, inode, parent Ino, name string, attr *Attr)
 		}
 
 		m.parseAttr(&n, attr)
+		m.genLog(ctx, s, now, "LINK(%d,%d,%s):%d", inode, parent, name, n.Nlink)
 		return err
 	}, inode))
 }
@@ -2949,6 +2955,13 @@ func (m *dbMeta) doBatchUnlink(ctx Context, parent Ino, entries []*Entry, delta 
 					}
 				}
 			}
+			if len(entryInfos) > 0 {
+				names := make([]string, 0, len(entryInfos))
+				for _, info := range entryInfos {
+					names = append(names, string(info.e.Name))
+				}
+				m.genLog(ctx, s, now, "UNLINKBATCH(%d,%s,%d,%t):%d", parent, strings.Join(names, ","), trash, updateParent, len(entryInfos))
+			}
 
 			return nil
 		})
@@ -3161,8 +3174,9 @@ func (m *dbMeta) doWrite(ctx Context, inode Ino, indx uint32, off uint32, slice 
 		if err := m.checkQuota(ctx, delta.space, 0, nodeAttr.Uid, nodeAttr.Gid, m.getParents(s, inode, nodeAttr.Parent)...); err != 0 {
 			return err
 		}
+		now := time.Now().UnixNano()
 		nodeAttr.setMtime(mtime.UnixNano())
-		nodeAttr.setCtime(time.Now().UnixNano())
+		nodeAttr.setCtime(now)
 		m.parseAttr(&nodeAttr, attr)
 
 		buf := marshalSlice(off, slice.Id, slice.Size, slice.Off, slice.Len)
@@ -3178,6 +3192,9 @@ func (m *dbMeta) doWrite(ctx Context, inode Ino, indx uint32, off uint32, slice 
 			ck := chunk{Inode: inode, Indx: indx}
 			_, _ = s.MustCols("indx").Get(&ck)
 			*numSlices = len(ck.Slices) / sliceBytes
+		}
+		if err == nil {
+			m.genLog(ctx, s, now, "WRITE(%d,%d,%d,%d,%d):%d", inode, indx, off, slice.Id, slice.Len, *numSlices)
 		}
 		return err
 	}, inode))
@@ -3306,6 +3323,7 @@ func (m *dbMeta) CopyFileRange(ctx Context, fin Ino, offIn uint64, fout Ino, off
 		if _, err := s.Cols("length", "mtime", "ctime", "mtimensec", "ctimensec").Update(&nout, &node{Inode: fout}); err != nil {
 			return err
 		}
+		m.genLog(ctx, s, now, "COPYFILE(%d,%d,%d,%d,%d):%d", fin, offIn, fout, offOut, size, nout.Length)
 		if copied != nil {
 			*copied = size
 		}
@@ -3419,6 +3437,9 @@ func (m *dbMeta) doSyncDirStat(ctx Context, ino Ino) (*dirStat, syscall.Errno) {
 		if err != nil && isDuplicateEntryErr(err) {
 			_, err = s.Cols("data_length", "used_space", "used_inodes").Update(record, &dirStats{Inode: ino})
 		}
+		if err == nil {
+			m.genLog(ctx, s, time.Now().UnixNano(), "DIRSTAT(%d):(%d,%d,%d)", ino, stat.length, stat.space, stat.inodes)
+		}
 		return err
 	})
 	return stat, errno(err)
@@ -3531,6 +3552,7 @@ func (m *dbMeta) deleteChunk(inode Ino, indx uint32) error {
 		if err == nil && n == 0 {
 			err = fmt.Errorf("chunk %d:%d changed, try restarting transaction", inode, indx)
 		}
+		m.genLog(Background(), s, time.Now().UnixNano(), "DELCHUNK(%d,%d)", inode, indx)
 		return err
 	})
 	if err != nil {
@@ -3604,6 +3626,7 @@ func (m *dbMeta) doCleanupDelayedSlices(ctx Context, edge int64) (int, error) {
 					}
 				}
 				_, e := ses.Delete(&delslices{Id: ds.Id})
+				m.genLog(ctx, ses, time.Now().UnixNano(), "CLEANUP_DELAYED_SLICES(%d)", ds.Id)
 				return e
 			}); err != nil {
 				logger.Warnf("Cleanup delayed slices %d: %s", ds.Id, err)
@@ -3670,6 +3693,7 @@ func (m *dbMeta) doCompactChunk(inode Ino, indx uint32, origin []byte, ss []*sli
 				}
 			}
 		}
+		m.genLog(Background(), s, time.Now().UnixNano(), "COMPACTCHUNK(%d,%d,%d,%d,%d,%d)", inode, indx, len(ss), skipped, id, size)
 		return nil
 	}, inode))
 	// there could be false-negative that the compaction is successful, double-check
@@ -3833,6 +3857,7 @@ func (m *dbMeta) scanTrashSlices(ctx Context, scan trashSliceScan) error {
 					}
 				}
 				_, err = tx.Delete(del)
+				m.genLog(ctx, tx, time.Now().UnixNano(), "CLEANUP_TRASH_SLICES(%d)", del.Id)
 			}
 			return err
 		})
@@ -3954,6 +3979,9 @@ func (m *dbMeta) doRepair(ctx Context, inode Ino, attr *Attr) syscall.Errno {
 				err = mustInsert(s, n)
 			}
 		}
+		if err == nil {
+			m.genLog(ctx, s, time.Now().UnixNano(), "REPAIR(%d)", inode)
+		}
 		return err
 	}, inode))
 }
@@ -4044,6 +4072,7 @@ func (m *dbMeta) doRemoveXattr(ctx Context, inode Ino, name string) syscall.Errn
 		} else if n == 0 {
 			return ENOATTR
 		} else {
+			m.genLog(ctx, s, time.Now().UnixNano(), "REMOVEXATTR(%d,%s)", inode, name)
 			return nil
 		}
 	}))
@@ -4127,6 +4156,9 @@ func (m *dbMeta) doSetQuota(ctx Context, qtype uint32, key uint64, quota *Quota)
 			} else {
 				e = mustInsert(s, origin)
 			}
+			if e == nil {
+				m.genLog(ctx, s, time.Now().UnixNano(), "SETQUOTA(%d,%d,%d,%d)", qtype, key, origin.MaxSpace, origin.MaxInodes)
+			}
 			return e
 		} else if qtype == UserQuotaType || qtype == GroupQuotaType {
 			origin := &userGroupQuota{Qtype: qtype, Qkey: key}
@@ -4140,6 +4172,9 @@ func (m *dbMeta) doSetQuota(ctx Context, qtype uint32, key uint64, quota *Quota)
 				_, e = s.Cols(updateColumns...).Update(origin, &userGroupQuota{Qtype: qtype, Qkey: key})
 			} else {
 				e = mustInsert(s, origin)
+			}
+			if e == nil {
+				m.genLog(ctx, s, time.Now().UnixNano(), "SETQUOTA(%d,%d,%d,%d)", qtype, key, origin.MaxSpace, origin.MaxInodes)
 			}
 			return e
 		} else {
@@ -4158,11 +4193,17 @@ func (m *dbMeta) doDelQuota(ctx Context, qtype uint32, key uint64) error {
 	return m.txn(func(s *xorm.Session) error {
 		if qtype == DirQuotaType {
 			_, e := s.Delete(&dirQuota{Inode: Ino(key)})
+			if e == nil {
+				m.genLog(ctx, s, time.Now().UnixNano(), "DELQUOTA(%d,%d)", qtype, key)
+			}
 			return e
 		} else {
 			_, e := s.Cols("max_space", "max_inodes").
 				Update(&userGroupQuota{MaxSpace: -1, MaxInodes: -1},
 					&userGroupQuota{Qtype: qtype, Qkey: key})
+			if e == nil {
+				m.genLog(ctx, s, time.Now().UnixNano(), "DELQUOTA(%d,%d)", qtype, key)
+			}
 			return e
 		}
 	})
@@ -5151,8 +5192,13 @@ func (m *dbMeta) doCloneEntry(ctx Context, srcIno Ino, parent Ino, name string, 
 				return syscall.ENOENT
 			}
 			sym.Inode = ino
-			return mustInsert(s, &sym)
+			if err := mustInsert(s, &sym); err != nil {
+				return err
+			}
+			m.genLog(ctx, s, now.UnixNano(), "CLONE(%d,%d)", srcIno, ino)
+			return nil
 		}
+		m.genLog(ctx, s, now.UnixNano(), "CLONE(%d,%d)", srcIno, ino)
 		return nil
 	}, srcIno))
 }
@@ -5441,6 +5487,9 @@ func (m *dbMeta) doCleanupDetachedNode(ctx Context, ino Ino) syscall.Errno {
 			return err
 		}
 		_, err = s.Delete(&detachedNode{Inode: ino})
+		if err == nil {
+			m.genLog(ctx, s, time.Now().UnixNano(), "CLEANUP(%d)", ino)
+		}
 		return err
 	}, ino))
 }
@@ -5479,6 +5528,9 @@ func (m *dbMeta) doAttachDirNode(ctx Context, parent Ino, inode Ino, name string
 			return err
 		}
 		_, err = s.Delete(&detachedNode{Inode: inode})
+		if err == nil {
+			m.genLog(ctx, s, now, "ATTACH(%d,%d,%s)", inode, parent, name)
+		}
 		return err
 	}, parent))
 }
@@ -5503,6 +5555,7 @@ func (m *dbMeta) doTouchAtime(ctx Context, inode Ino, attr *Attr, now time.Time)
 		attr.Atimensec = uint32(curNode.Atime%1e6*1000) + uint32(curNode.Atimensec)
 		if _, err = s.Cols("atime", "atimensec").Update(&curNode, &node{Inode: inode}); err == nil {
 			updated = true
+			m.genLog(ctx, s, now.UnixNano(), "ACCESS(%d)", inode)
 		}
 		return err
 	}, inode)
@@ -5682,10 +5735,14 @@ func (m *dbMeta) loadDumpedACLs(ctx Context) error {
 	}
 
 	acls := make([]*acl, 0, len(id2Rule))
+	maxID := uint32(0)
 	for id, rule := range id2Rule {
 		aclV := newSQLAcl(rule)
 		aclV.Id = id
 		acls = append(acls, aclV)
+		if id > maxID {
+			maxID = id
+		}
 	}
 
 	return m.txn(func(s *xorm.Session) error {
@@ -5696,6 +5753,7 @@ func (m *dbMeta) loadDumpedACLs(ctx Context) error {
 		if int(n) != len(acls) {
 			return fmt.Errorf("only %d acls inserted, expected %d", n, len(acls))
 		}
+		m.genLog(ctx, s, time.Now().UnixNano(), "LOADDUMPEDACLS(%d)", maxID)
 		return nil
 	})
 }
@@ -5708,6 +5766,7 @@ func (m *dbMeta) doStoreToken(ctx Context, token []byte) (id uint32, st syscall.
 			return err
 		}
 		id = t.Id
+		m.genLog(ctx, s, time.Now().UnixNano(), "STORETOKEN(%d,%s)", id, string(token))
 		return nil
 	})
 	return id, errno(err)
@@ -5716,6 +5775,9 @@ func (m *dbMeta) doStoreToken(ctx Context, token []byte) (id uint32, st syscall.
 func (m *dbMeta) doUpdateToken(ctx Context, id uint32, token []byte) syscall.Errno {
 	return errno(m.txn(func(s *xorm.Session) error {
 		_, err := s.Cols("token").Update(&delegationToken{Id: id, Token: token}, &delegationToken{Id: id})
+		if err == nil {
+			m.genLog(ctx, s, time.Now().UnixNano(), "UPDATETOKEN(%d,%s)", id, string(token))
+		}
 		return err
 	}))
 }
@@ -5739,6 +5801,13 @@ func (m *dbMeta) doLoadToken(ctx Context, id uint32) (token []byte, st syscall.E
 func (m *dbMeta) doDeleteTokens(ctx Context, ids []uint32) syscall.Errno {
 	return errno(m.txn(func(s *xorm.Session) error {
 		_, err := s.In("id", ids).Delete(&delegationToken{})
+		if err == nil {
+			strIds := make([]string, len(ids))
+			for i, id := range ids {
+				strIds[i] = strconv.FormatUint(uint64(id), 10)
+			}
+			m.genLog(ctx, s, time.Now().UnixNano(), "DELETETOKENS(%v)", strIds)
+		}
 		return err
 	}))
 }

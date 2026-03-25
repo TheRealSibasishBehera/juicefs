@@ -22,6 +22,7 @@ package meta
 import (
 	"bytes"
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
@@ -30,7 +31,12 @@ import (
 
 type badgerTxn struct {
 	t *badger.Txn
-	c *badger.DB
+	c *badgerClient
+}
+
+func (tx *badgerTxn) id() uint64 {
+	// add logical id to avoid conflict between concurrent transactions
+	return tx.t.ReadTs()*1e2 + tx.c.getId()%1e2
 }
 
 func (tx *badgerTxn) get(key []byte) []byte {
@@ -133,11 +139,23 @@ func (tx *badgerTxn) delete(key []byte) {
 type badgerClient struct {
 	client *badger.DB
 	ticker *time.Ticker
-	done chan struct{}
+	done   chan struct{}
+	nextid uint64
 }
 
 func (c *badgerClient) name() string {
 	return "badger"
+}
+
+func (c *badgerClient) getId() uint64 {
+	return atomic.AddUint64(&c.nextid, 1)
+}
+
+func (c *badgerClient) rewind(id uint64) uint64 {
+	if id > 1e5 {
+		return id - 1e5
+	}
+	return 1
 }
 
 func (c *badgerClient) shouldRetry(err error) bool {
@@ -153,7 +171,7 @@ func (c *badgerClient) simpleTxn(ctx context.Context, f func(*kvTxn) error, retr
 }
 
 func (c *badgerClient) txn(ctx context.Context, f func(*kvTxn) error, retry int) (err error) {
-	tx := &badgerTxn{c.client.NewTransaction(true), c.client}
+	tx := &badgerTxn{c.client.NewTransaction(true), c}
 	defer func() { tx.t.Discard() }()
 	defer func() {
 		if r := recover(); r != nil {
@@ -231,7 +249,7 @@ func newBadgerClient(addr string) (tkvClient, error) {
 			}
 		}
 	}()
-	return &badgerClient{client, ticker, done}, nil
+	return &badgerClient{client, ticker, done, 0}, nil
 }
 
 func init() {

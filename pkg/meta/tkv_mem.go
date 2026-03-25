@@ -54,6 +54,10 @@ type memTxn struct {
 	buffer   map[string][]byte
 }
 
+func (tx *memTxn) id() uint64 {
+	return tx.store.getId()
+}
+
 func (tx *memTxn) get(key []byte) []byte {
 	k := string(key)
 	if v, ok := tx.buffer[k]; ok {
@@ -163,8 +167,23 @@ func (it *kvItem) Less(o btree.Item) bool {
 
 type memKV struct {
 	sync.Mutex
-	items *btree.BTree
-	temp  *kvItem
+	items  *btree.BTree
+	temp   *kvItem
+	nextid uint64
+}
+
+func (c *memKV) getId() uint64 {
+	c.Lock()
+	defer c.Unlock()
+	c.nextid++
+	return c.nextid
+}
+
+func (c *memKV) rewind(id uint64) uint64 {
+	if id > 1e3 {
+		return id - 1e3
+	}
+	return 1
 }
 
 func (c *memKV) name() string {
