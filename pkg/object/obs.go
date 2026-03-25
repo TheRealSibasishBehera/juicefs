@@ -46,8 +46,8 @@ type obsClient struct {
 	bucket    string
 	region    string
 	checkEtag bool
-	sc        string
 	c         *obs.ObsClient
+	tierStorage
 }
 
 func (s *obsClient) String() string {
@@ -102,6 +102,7 @@ func (s *obsClient) Head(ctx context.Context, key string) (Object, error) {
 		r.LastModified,
 		strings.HasSuffix(key, "/"),
 		getStorageClassStr(r.StorageClass),
+		r.Restore,
 	}, nil
 }
 
@@ -168,7 +169,8 @@ func (s *obsClient) Put(ctx context.Context, key string, in io.Reader, getters .
 	params.ContentLength = vlen
 	params.ContentMD5 = base64.StdEncoding.EncodeToString(sum[:])
 	params.ContentType = mimeType
-	params.StorageClass = obs.StorageClassType(s.sc)
+	sc := s.GetStorageClass(ctx)
+	params.StorageClass = obs.StorageClassType(sc)
 	resp, err := s.c.PutObject(params)
 	if err == nil && s.checkEtag && strings.Trim(resp.ETag, "\"") != obs.Hex(sum) {
 		err = fmt.Errorf("unexpected ETag: %s != %s", strings.Trim(resp.ETag, "\""), obs.Hex(sum))
@@ -188,6 +190,15 @@ func (s *obsClient) Copy(ctx context.Context, dst, src string) error {
 	params.CopySourceKey = src
 	params.StorageClass = obs.StorageClassType(s.sc)
 	_, err := s.c.CopyObject(params)
+	return err
+}
+func (s *obsClient) Restore(ctx context.Context, key string) error {
+	_, err := s.c.RestoreObject(&obs.RestoreObjectInput{
+		Bucket: s.bucket,
+		Key:    key,
+		Days:   defaultRestoreDays,
+		Tier:   "Standard",
+	})
 	return err
 }
 
@@ -221,7 +232,7 @@ func (s *obsClient) List(ctx context.Context, prefix, start, token, delimiter st
 	for i := 0; i < n; i++ {
 		// Obs SDK listObjects method already decodes the object key.
 		o := resp.Contents[i]
-		objs[i] = &obj{o.Key, o.Size, o.LastModified, strings.HasSuffix(o.Key, "/"), string(o.StorageClass)}
+		objs[i] = &obj{o.Key, o.Size, o.LastModified, strings.HasSuffix(o.Key, "/"), string(o.StorageClass), ""}
 	}
 	if delimiter != "" {
 		for _, p := range resp.CommonPrefixes {
@@ -229,7 +240,7 @@ func (s *obsClient) List(ctx context.Context, prefix, start, token, delimiter st
 			if err != nil {
 				return nil, false, "", errors.WithMessagef(err, "failed to decode commonPrefixes %s", p)
 			}
-			objs = append(objs, &obj{prefix, 0, time.Unix(0, 0), true, ""})
+			objs = append(objs, &obj{prefix, 0, time.Unix(0, 0), true, "", ""})
 		}
 		sort.Slice(objs, func(i, j int) bool { return objs[i].Key() < objs[j].Key() })
 	}

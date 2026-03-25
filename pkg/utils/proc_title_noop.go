@@ -1,5 +1,8 @@
+//go:build nogspt
+// +build nogspt
+
 /*
- * JuiceFS, Copyright 2022 Juicedata, Inc.
+ * JuiceFS, Copyright 2026 Juicedata, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,14 +19,7 @@
 
 package utils
 
-import (
-	"errors"
-	"syscall"
-)
-
-var (
-	ErrNotSUP      = errors.New("not supported")
-	ErrFuncTimeout = errors.New("function timeout")
-	ErrSkipped     = errors.New("skipped")
-	ErrExtlink     = syscall.Errno(1000)
-)
+func SetProcTitle(args []string) {
+	// noop: gspt is excluded from this build to prevent argv modification
+	// when libjfs.so is loaded as a shared library (e.g. by the Java SDK).
+}

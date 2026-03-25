@@ -931,7 +931,7 @@ func (fs *FileSystem) doResolve(ctx meta.Context, p string, followLastSymlink bo
 	var attr = &Attr{}
 
 	if fs.conf.FastResolve {
-		err = fs.m.Resolve(ctx, 1, p, &inode, attr)
+		err = fs.m.Resolve(ctx, 1, p, &inode, attr, false)
 		if err == 0 {
 			fi = AttrToFileInfo(inode, attr)
 			p = strings.TrimRight(p, "/")
@@ -1159,7 +1159,7 @@ func (fs *FileSystem) HandleQuota(ctx meta.Context, path string, cmd uint8, capa
 		qs[path] = q
 	}
 
-	if _err := fs.m.HandleQuota(meta.Background(), cmd, path, 0, 0, qs, strict, repair, create); _err != nil {
+	if _err := fs.m.HandleQuota(meta.Background(), cmd, path, meta.DirQuotaType, qs, strict, repair, create); _err != nil {
 		if strings.HasPrefix(_err.Error(), "no quota for inode") {
 			return qs, 0
 		}
@@ -1363,7 +1363,7 @@ func (f *File) Pwrite(ctx meta.Context, b []byte, offset int64) (n int, err sysc
 
 func (f *File) pwrite(ctx meta.Context, b []byte, offset int64) (n int, err syscall.Errno) {
 	if f.wdata == nil {
-		f.wdata = f.fs.writer.Open(f.inode, uint64(f.info.Size()))
+		f.wdata = f.fs.writer.Open(f.inode, uint64(f.info.Size()), f.info.attr.Tier)
 	}
 	err = f.wdata.Write(ctx, uint64(offset), b)
 	if err != 0 {
@@ -1566,7 +1566,7 @@ func (f *File) GetQuota(ctx meta.Context) (quota *meta.Quota, err error) {
 		return quota, err
 	}
 	// get directory quota
-	err = f.fs.m.HandleQuota(ctx, meta.QuotaGet, f.path, 0, 0, qs, false, false, false)
+	err = f.fs.m.HandleQuota(ctx, meta.QuotaGet, f.path, meta.DirQuotaType, qs, false, false, false)
 	if err != nil {
 		return nil, err
 	}

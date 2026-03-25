@@ -305,7 +305,7 @@ func registerMetaMsg(m meta.Meta, store chunk.ChunkStore, chunkConf *chunk.Confi
 		return store.Remove(args[0].(uint64), int(args[1].(uint32)))
 	})
 	m.OnMsg(meta.CompactChunk, func(args ...interface{}) error {
-		return vfs.Compact(*chunkConf, store, args[0].([]meta.Slice), args[1].(uint64))
+		return vfs.Compact(*chunkConf, store, args[0].([]meta.Slice), args[1].(uint64), args[2].(uint8))
 	})
 }
 

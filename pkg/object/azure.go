@@ -29,8 +29,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
@@ -38,15 +36,16 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/sas"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 type wasb struct {
 	DefaultObjectStorage
 	container    *container.Client
 	azblobCli    *azblob.Client
-	sc           string
 	cName        string
 	useTokenAuth bool // true when using managed identity/token-based auth, false for shared key/connection string
+	tierStorage
 }
 
 func (b *wasb) String() string {
@@ -78,6 +77,7 @@ func (b *wasb) Head(ctx context.Context, key string) (Object, error) {
 		*properties.LastModified,
 		strings.HasSuffix(key, "/"),
 		*properties.AccessTier,
+		*properties.ArchiveStatus,
 	}, nil
 }
 
@@ -102,17 +102,19 @@ func str2Tier(tier string) *blob2.AccessTier {
 }
 
 func (b *wasb) Put(ctx context.Context, key string, data io.Reader, getters ...AttrGetter) error {
+	sc := b.GetStorageClass(ctx)
 	options := azblob.UploadStreamOptions{}
-	if b.sc != "" {
-		options.AccessTier = str2Tier(b.sc)
+	if sc != "" {
+		options.AccessTier = str2Tier(sc)
 	}
 	resp, err := b.azblobCli.UploadStream(ctx, b.cName, key, data, &options)
 	attrs := ApplyGetters(getters...)
-	attrs.SetRequestID(aws.ToString(resp.RequestID)).SetStorageClass(b.sc)
+	attrs.SetRequestID(aws.ToString(resp.RequestID)).SetStorageClass(sc)
 	return err
 }
 
 func (b *wasb) Copy(ctx context.Context, dst, src string) error {
+	// fixme: copy should support change object tier
 	dstCli := b.container.NewBlobClient(dst)
 	srcCli := b.container.NewBlobClient(src)
 	options := &blob2.CopyFromURLOptions{}
@@ -181,6 +183,7 @@ func (b *wasb) List(ctx context.Context, prefix, startAfter, token, delimiter st
 			*mtime,
 			strings.HasSuffix(*blob.Name, "/"),
 			string(*blob.Properties.AccessTier),
+			"",
 		})
 	}
 
@@ -194,6 +197,11 @@ func (b *wasb) List(ctx context.Context, prefix, startAfter, token, delimiter st
 func (b *wasb) SetStorageClass(sc string) error {
 	b.sc = sc
 	return nil
+}
+
+// Restore Azure does not support restoring to a temporary read-only state; it can only directly permanently change the tier.
+func (b *wasb) Restore(ctx context.Context, key string) error {
+	return notSupported
 }
 
 // createAzureCredential creates a credential for Azure authentication.

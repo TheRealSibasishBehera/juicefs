@@ -1,6 +1,6 @@
 module github.com/juicedata/juicefs
 
-go 1.23.0
+go 1.24.0
 
 require (
 	cloud.google.com/go/compute/metadata v0.5.2
@@ -28,7 +28,7 @@ require (
 	github.com/davies/groupcache v0.0.0-20230821031435-e4e8362f58e1
 	github.com/dgraph-io/badger/v4 v4.5.1
 	github.com/dustin/go-humanize v1.0.1
-	github.com/emmansun/gmsm v0.34.1
+	github.com/emmansun/gmsm v0.41.1
 	github.com/erikdubbelboer/gspt v0.0.0-20210805194459-ce36a5128377
 	github.com/go-http-utils/headers v0.0.0-20181008091004-fed159eddc2a
 	github.com/go-sql-driver/mysql v1.9.1
@@ -91,13 +91,13 @@ require (
 	go.etcd.io/etcd/client/v3 v3.5.9
 	go.uber.org/automaxprocs v1.6.0
 	go.uber.org/zap v1.24.0
-	golang.org/x/crypto v0.41.0
-	golang.org/x/net v0.42.0
+	golang.org/x/crypto v0.48.0
+	golang.org/x/net v0.49.0
 	golang.org/x/oauth2 v0.24.0
-	golang.org/x/sync v0.16.0
-	golang.org/x/sys v0.35.0
-	golang.org/x/term v0.34.0
-	golang.org/x/text v0.28.0
+	golang.org/x/sync v0.19.0
+	golang.org/x/sys v0.41.0
+	golang.org/x/term v0.40.0
+	golang.org/x/text v0.34.0
 	google.golang.org/api v0.210.0
 	google.golang.org/protobuf v1.36.3
 	gopkg.in/kothar/go-backblaze.v0 v0.0.0-20210124194846-35409b867216
@@ -310,9 +310,9 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/arch v0.11.0 // indirect
 	golang.org/x/exp v0.0.0-20240119083558-1b970713d09a // indirect
-	golang.org/x/mod v0.26.0 // indirect
+	golang.org/x/mod v0.32.0 // indirect
 	golang.org/x/time v0.8.0 // indirect
-	golang.org/x/tools v0.35.0 // indirect
+	golang.org/x/tools v0.41.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	google.golang.org/genproto v0.0.0-20241118233622-e639e219e697 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20241113202542-65e8d215514f // indirect
@@ -329,7 +329,7 @@ require (
 
 replace github.com/minio/minio v0.0.0-20210206053228-97fe57bba92c => github.com/juicedata/minio v0.0.0-20251120043259-079fa6a601db
 
-replace github.com/hanwen/go-fuse/v2 v2.1.1-0.20210611132105-24a1dfe6b4f8 => github.com/juicedata/go-fuse/v2 v2.1.1-0.20250807045235-112198daa7df
+replace github.com/hanwen/go-fuse/v2 v2.1.1-0.20210611132105-24a1dfe6b4f8 => github.com/juicedata/go-fuse/v2 v2.1.1-0.20260324060633-bc6464442863
 
 replace github.com/dgrijalva/jwt-go v3.2.0+incompatible => github.com/golang-jwt/jwt v3.2.1+incompatible
 
@@ -355,6 +355,6 @@ replace github.com/mattn/go-colorable v0.1.9 => github.com/juicedata/go-colorabl
 
 replace github.com/mattn/go-colorable v0.0.9 => github.com/juicedata/go-colorable v0.0.0-20250208072043-a97a0c2023db
 
-replace github.com/cloudsoda/go-smb2 => github.com/juicedata/go-smb2 v0.0.0-20250917090526-d2d0abfb0e05
+replace github.com/cloudsoda/go-smb2 => github.com/juicedata/go-smb2 v0.0.0-20260310064141-58f27d06634e
 
 replace github.com/hashicorp/golang-lru/v2 v2.0.7 => github.com/juicedata/golang-lru/v2 v2.0.8-0.20251126062551-1b321869f904
