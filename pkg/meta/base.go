@@ -616,8 +616,22 @@ func (m *baseMeta) getTxnId() uint64 {
 	return atomic.AddUint64(&m.nextTxnId, 1)
 }
 
-func (m *baseMeta) ScanChangelog(ctx Context, last int64, handler func(ver int64, entry string) error) error {
-	return nil
+func logEncode(name []byte) string {
+	var escname = make([]byte, 0)
+	for _, c := range name {
+		if c < 32 || c >= 127 || c == ',' || c == '%' || c == '(' || c == ')' || c == '"' || c == '\\' {
+			escname = append(escname, '%')
+			escname = append(escname, CHARS[(c>>4)&0xF])
+			escname = append(escname, CHARS[c&0xF])
+		} else {
+			escname = append(escname, c)
+		}
+	}
+	return string(escname)
+}
+
+func logEncode2(name string) string {
+	return logEncode([]byte(name))
 }
 
 func (m *baseMeta) checkRoot(inode Ino) Ino {

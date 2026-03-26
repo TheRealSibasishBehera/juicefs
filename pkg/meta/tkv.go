@@ -596,11 +596,14 @@ func (m *kvMeta) doFlushStats() {
 }
 
 func (m *kvMeta) doNewSession(sinfo []byte, update bool) error {
-	if err := m.setValue(m.sessionKey(m.sid), m.packInt64(m.expireTime())); err != nil {
-		return fmt.Errorf("set session ID %d: %s", m.sid, err)
-	}
-	if err := m.setValue(m.sessionInfoKey(m.sid), sinfo); err != nil {
-		return fmt.Errorf("set session info: %s", err)
+	err := m.txn(Background(), func(tx *kvTxn) error {
+		tx.set(m.sessionKey(m.sid), m.packInt64(m.expireTime()))
+		tx.set(m.sessionInfoKey(m.sid), sinfo)
+		m.genLog(tx, time.Now(), "NEWSESSION(%d,%d,%s)", m.sid, m.expireTime(), logEncode(sinfo))
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("new session: %s", err)
 	}
 	return nil
 }
@@ -614,7 +617,6 @@ func (m *kvMeta) doRefreshSession() error {
 		}
 		expire := m.expireTime()
 		tx.set(m.sessionKey(m.sid), m.packInt64(expire))
-		m.genLog(tx, time.Now(), "SESSIONREFRESH(%d)", m.sid, expire)
 		return nil
 	})
 }
@@ -693,7 +695,13 @@ func (m *kvMeta) doCleanStaleSession(sid uint64) error {
 	if fail {
 		return fmt.Errorf("failed to clean up sid %d", sid)
 	} else {
-		return m.deleteKeys(m.sessionKey(sid), m.legacySessionKey(sid), m.sessionInfoKey(sid))
+		return m.txn(ctx, func(tx *kvTxn) error {
+			tx.delete(m.sessionKey(sid))
+			tx.delete(m.legacySessionKey(sid))
+			tx.delete(m.sessionInfoKey(sid))
+			m.genLog(tx, time.Now(), "CLEANSESSION(%d)", sid)
+			return nil
+		})
 	}
 }
 
@@ -939,7 +947,7 @@ func (m *kvMeta) txn(ctx Context, f func(tx *kvTxn) error, inodes ...Ino) error 
 func (m *kvMeta) setValue(key, value []byte) error {
 	return m.txn(Background(), func(tx *kvTxn) error {
 		tx.set(key, value)
-		m.genLog(tx, time.Now(), "SET(%s,%s)", key, value)
+		m.genLog(tx, time.Now(), "SET(%s,%s)", logEncode(key), logEncode(value))
 		return nil
 	})
 }
@@ -1059,6 +1067,7 @@ func (m *kvMeta) doSetAttr(ctx Context, inode Ino, set uint16, sugidclearmode ui
 		dirtyAttr.Ctimensec = uint32(now.Nanosecond())
 		tx.set(m.inodeKey(inode), m.marshal(dirtyAttr))
 		*attr = *dirtyAttr
+		m.genLog(tx, now, "SETATTR(%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d)", inode, set, sugidclearmode, attr.Uid, attr.Gid, attr.Mode, attr.Flags, attr.Atime, attr.Mtime, attr.Atimensec, attr.Mtimensec)
 		return nil
 	}, inode))
 }
@@ -1327,9 +1336,13 @@ func (m *kvMeta) doMknod(ctx Context, parent Ino, name string, _type uint8, mode
 		attr.Mtimensec = uint32(now.Nanosecond())
 		attr.Ctime = now.Unix()
 		attr.Ctimensec = uint32(now.Nanosecond())
-		if ctx.Value(CtxKey("behavior")) == "Hadoop" || runtime.GOOS == "darwin" {
+		behavior := ctx.Value(CtxKey("behavior"))
+		if behavior == nil {
+			behavior = runtime.GOOS
+		}
+		if behavior == "Hadoop" || behavior == "darwin" {
 			attr.Gid = pattr.Gid
-		} else if runtime.GOOS == "linux" && pattr.Mode&02000 != 0 {
+		} else if behavior == "linux" && pattr.Mode&02000 != 0 {
 			attr.Gid = pattr.Gid
 			if _type == TypeDirectory {
 				attr.Mode |= 02000
@@ -1357,7 +1370,7 @@ func (m *kvMeta) doMknod(ctx Context, parent Ino, name string, _type uint8, mode
 		if _type == TypeDirectory {
 			tx.set(m.dirStatKey(*inode), m.packDirStat(&dirStat{}))
 		}
-		m.genLog(tx, now, "CREATE(%d,%s,%d,%d,%d,%v,%t):%d", parent, name, ctx.Uid(), ctx.Gid(), mode, ctx.Value(CtxKey("behavior")), updateParent, *inode)
+		m.genLog(tx, now, "CREATE(%d,%s,%d,%d,%d,%d,%d,%s,%s,%t):%d", parent, logEncode2(name), ctx.Uid(), ctx.Gid(), _type, mode, cumask, logEncode2(path), behavior, updateParent, *inode)
 		return nil
 	}, parent))
 }
@@ -1493,7 +1506,7 @@ func (m *kvMeta) doUnlink(ctx Context, parent Ino, name string, attr *Attr, skip
 				tx.deleteKeys(m.fmtKey("A", inode, "P"))
 			}
 		}
-		m.genLog(tx, now, "UNLINK(%d,%s,%d,%t,%t):%d", parent, name, trash, opened, updateParent, inode)
+		m.genLog(tx, now, "UNLINK(%d,%s,%d,%t,%t):%d", parent, logEncode2(name), trash, opened, updateParent, inode)
 		return nil
 	}, parent)
 	if err == nil && trash == 0 {
@@ -1771,10 +1784,12 @@ func (m *kvMeta) doBatchUnlink(ctx Context, parent Ino, entries []*Entry, delta 
 			}
 			if len(entryInfos) > 0 {
 				names := make([]string, 0, len(entryInfos))
+				inodes := make([]string, 0, len(entryInfos))
 				for _, info := range entryInfos {
-					names = append(names, info.name)
+					names = append(names, logEncode2(info.name))
+					inodes = append(inodes, strconv.FormatUint(uint64(info.inode), 10))
 				}
-				m.genLog(tx, now, "UNLINKBATCH(%d,%s,%d,%t):%d", parent, strings.Join(names, ","), trash, updateParent, len(entryInfos))
+				m.genLog(tx, now, "UNLINKBATCH(%d,%s,%d,%t):%s", parent, strings.Join(names, ","), trash, updateParent, strings.Join(inodes, ","))
 			}
 
 			return nil
@@ -1894,7 +1909,7 @@ func (m *kvMeta) doRmdir(ctx Context, parent Ino, name string, pinode *Ino, oldA
 			tx.delete(m.inodeKey(inode))
 			tx.deleteKeys(m.xattrKey(inode, ""))
 		}
-		m.genLog(tx, now, "RMDIR(%d,%s,%d,%t):%d", parent, name, trash, !parent.IsTrash(), inode)
+		m.genLog(tx, now, "RMDIR(%d,%s,%d):%d", parent, logEncode2(name), trash, inode)
 		return nil
 	}, parent)
 	if err == nil && trash == 0 {
@@ -2165,7 +2180,7 @@ func (m *kvMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 		if dupdate {
 			tx.set(m.inodeKey(parentDst), m.marshal(&dattr))
 		}
-		m.genLog(tx, now, "MOVE(%d,%s,%d,%s,%d,%t):%d", parentSrc, nameSrc, parentDst, nameDst, dino, !parentSrc.IsTrash(), ino)
+		m.genLog(tx, now, "RENAME(%d,%s,%d,%s,%d):%d", parentSrc, logEncode2(nameSrc), parentDst, logEncode2(nameDst), flags, ino)
 		return nil
 	}, parentLocks...)
 	if err == nil && !exchange && trash == 0 {
@@ -2236,7 +2251,7 @@ func (m *kvMeta) doLink(ctx Context, inode, parent Ino, name string, attr *Attr)
 		if attr != nil {
 			*attr = iattr
 		}
-		m.genLog(tx, now, "LINK(%d,%d,%s):%d", inode, parent, name, iattr.Nlink)
+		m.genLog(tx, now, "LINK(%d,%d,%s,%t):%d", inode, parent, logEncode2(name), updateParent, iattr.Nlink)
 		return nil
 	}, parent))
 }
@@ -2546,7 +2561,7 @@ func (m *kvMeta) CopyFileRange(ctx Context, fin Ino, offIn uint64, fout Ino, off
 			tx.append([]byte(k), v)
 		}
 		tx.set(m.inodeKey(fout), m.marshal(&attr))
-		m.genLog(tx, now, "COPYFILE(%d,%d,%d,%d,%d):%d", fin, offIn, fout, offOut, size, attr.Length)
+		m.genLog(tx, now, "COPYFILERANGE(%d,%d,%d,%d,%d):%d", fin, offIn, fout, offOut, size, attr.Length)
 		if copied != nil {
 			*copied = size
 		}
@@ -2603,7 +2618,7 @@ func (m *kvMeta) doSyncDirStat(ctx Context, ino Ino) (*dirStat, syscall.Errno) {
 			return syscall.ENOENT
 		}
 		tx.set(m.dirStatKey(ino), m.packDirStat(stat))
-		m.genLog(tx, time.Now(), "DIRSTAT(%d):(%d,%d,%d)", ino, stat.length, stat.space, stat.inodes)
+		m.genLog(tx, time.Now(), "DIRSTAT(%d,%d,%d,%d)", ino, stat.length, stat.space, stat.inodes)
 		return nil
 	}, 0)
 	if err != nil && m.shouldRetry(err) {
@@ -2751,7 +2766,6 @@ func (m *kvMeta) cleanupZeroRef(id uint64, size uint32) {
 			return syscall.EINVAL
 		}
 		tx.delete(m.sliceKey(id, size))
-		m.genLog(tx, time.Now(), "CLEANUP_ZERO_REF(%s)", m.sliceKey(id, size))
 		return nil
 	})
 }
@@ -2815,7 +2829,6 @@ func (m *kvMeta) doCleanupDelayedSlices(ctx Context, edge int64) (int, error) {
 					rs = append(rs, tx.incrBy(m.sliceKey(s.Id, s.Size), -1))
 				}
 				tx.delete(key)
-				m.genLog(tx, time.Now(), "CLEANUP_DELAYED_SLICES(%q)", key)
 				return nil
 			}); err != nil {
 				logger.Warnf("Cleanup delayed slices %q: %s", key, err)
@@ -2861,7 +2874,7 @@ func (m *kvMeta) doCompactChunk(inode Ino, indx uint32, buf []byte, ss []*slice,
 				}
 			}
 		}
-		m.genLog(tx, time.Now(), "COMPACTCHUNK(%d,%d,%d,%d,%d,%d)", inode, indx, len(ss), skipped, id, size)
+		m.genLog(tx, time.Now(), "COMPACTCHUNK(%d,%d,%d,%d,%d,%d,%d)", inode, indx, skipped, len(ss), pos, id, size)
 		return nil
 	}, inode)) // less conflicts with `write`
 	// there could be false-negative that the compaction is successful, double-check
@@ -3004,7 +3017,6 @@ func (m *kvMeta) scanTrashSlices(ctx Context, scan trashSliceScan) error {
 					rs = append(rs, tx.incrBy(m.sliceKey(s.Id, s.Size), -1))
 				}
 				tx.delete(key)
-				m.genLog(tx, time.Now(), "CLEANUP_TRASH_SLICES(%q)", key)
 			}
 			return nil
 		})
@@ -3091,7 +3103,7 @@ func (m *kvMeta) doRepair(ctx Context, inode Ino, attr *Attr) syscall.Errno {
 			return true
 		})
 		tx.set(m.inodeKey(inode), m.marshal(attr))
-		m.genLog(tx, time.Now(), "REPAIR(%d)", inode)
+		m.genLog(tx, time.Now(), "REPAIRDIR(%d)", inode)
 		return nil
 	}, inode))
 }
@@ -3157,6 +3169,7 @@ func (m *kvMeta) doSetXattr(ctx Context, inode Ino, name string, value []byte, f
 		if v == nil || !bytes.Equal(v, value) {
 			tx.set(key, value)
 		}
+		m.genLog(tx, time.Now(), "SETXATTR(%d,%s,%s)", inode, name, logEncode(value))
 		return nil
 	}))
 }
@@ -3246,7 +3259,7 @@ func (m *kvMeta) doSetQuota(ctx Context, qtype uint32, key uint64, quota *Quota)
 			origin.UsedInodes = quota.UsedInodes
 		}
 		tx.set(quotaKey, m.packQuota(origin))
-		m.genLog(tx, time.Now(), "SETQUOTA(%d,%d,%d,%d)", qtype, key, origin.MaxSpace, origin.MaxInodes)
+		m.genLog(tx, time.Now(), "SETQUOTA(%d,%d,%d,%d)", qtype, key, quota.MaxSpace, quota.MaxInodes)
 		return nil
 	})
 	return created, err
@@ -4176,7 +4189,7 @@ func (m *kvMeta) doCloneEntry(ctx Context, srcIno Ino, parent Ino, name string, 
 		case TypeSymlink:
 			tx.set(m.symKey(ino), tx.get(m.symKey(srcIno)))
 		}
-		m.genLog(tx, time.Now(), "CLONE(%d,%d)", srcIno, ino)
+		m.genLog(tx, time.Now(), "CLONE(%d,%d,%s,%d,%d,%t):%d", srcIno, parent, logEncode2(name), ino, cmode, cumask, top, ino)
 		return nil
 	}, srcIno))
 }
@@ -4211,7 +4224,7 @@ func (m *kvMeta) doCleanupDetachedNode(ctx Context, ino Ino) syscall.Errno {
 		tx.deleteKeys(m.xattrKey(ino, ""))
 		tx.delete(m.dirStatKey(ino))
 		tx.delete(m.detachedKey(ino))
-		m.genLog(tx, time.Now(), "CLEANUP(%d)", ino)
+		m.genLog(tx, time.Now(), "DETACH(%d)", ino)
 		return nil
 	}, ino))
 }
@@ -4442,8 +4455,6 @@ func (m *kvMeta) loadDumpedACLs(ctx Context) error {
 			tx.set(m.aclKey(id), rule.Encode())
 		}
 		tx.set(m.counterKey(aclCounter), packCounter(int64(maxId)))
-		// FIXME
-		m.genLog(tx, time.Now(), "LOADDUMPEDACLS(%d)", maxId)
 		return nil
 	})
 }
@@ -4456,7 +4467,7 @@ func (m *kvMeta) doStoreToken(ctx Context, token []byte) (id uint32, st syscall.
 		}
 		tx.set(m.krbTokenKey(uint32(newId)), token)
 		id = uint32(newId)
-		m.genLog(tx, time.Now(), "STORETOKEN(%d,%s)", id, string(token))
+		m.genLog(tx, time.Now(), "STORETOKEN(%d,%s)", id, logEncode(token))
 		return nil
 	})
 	return id, errno(err)
@@ -4493,7 +4504,7 @@ func (m *kvMeta) doDeleteTokens(ctx Context, ids []uint32) syscall.Errno {
 		for i, id := range ids {
 			strIds[i] = strconv.FormatUint(uint64(id), 10)
 		}
-		m.genLog(tx, time.Now(), "DELETETOKENS(%v)", strIds)
+		m.genLog(tx, time.Now(), "DELETETOKENS(%v)", strings.Join(strIds, ","))
 		return nil
 	}))
 }
