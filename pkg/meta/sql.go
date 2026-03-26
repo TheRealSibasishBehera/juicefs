@@ -4712,6 +4712,9 @@ func (m *dbMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fast, 
 		}
 		userQuotas := make(map[uint64]*DumpedQuota, len(userQuotaRows))
 		for _, q := range userQuotaRows {
+			if q.MaxSpace == -1 && q.MaxInodes == -1 {
+				continue
+			}
 			userQuotas[q.Qkey] = &DumpedQuota{MaxSpace: q.MaxSpace, MaxInodes: q.MaxInodes, UsedSpace: q.UsedSpace, UsedInodes: q.UsedInodes}
 		}
 
@@ -4721,6 +4724,9 @@ func (m *dbMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fast, 
 		}
 		groupQuotas := make(map[uint64]*DumpedQuota, len(groupQuotaRows))
 		for _, q := range groupQuotaRows {
+			if q.MaxSpace == -1 && q.MaxInodes == -1 {
+				continue
+			}
 			groupQuotas[q.Qkey] = &DumpedQuota{MaxSpace: q.MaxSpace, MaxInodes: q.MaxInodes, UsedSpace: q.UsedSpace, UsedInodes: q.UsedInodes}
 		}
 

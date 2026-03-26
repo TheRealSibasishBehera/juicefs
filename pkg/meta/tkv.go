@@ -3786,6 +3786,9 @@ func (m *kvMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fast, 
 	for k, v := range userPairs {
 		uid := binary.BigEndian.Uint64([]byte(k[2:]))
 		quota := m.parseQuota(v)
+		if quota.MaxSpace == -1 && quota.MaxInodes == -1 {
+			continue
+		}
 		userQuotas[uid] = &DumpedQuota{MaxSpace: quota.MaxSpace, MaxInodes: quota.MaxInodes, UsedSpace: quota.UsedSpace, UsedInodes: quota.UsedInodes}
 	}
 
@@ -3799,6 +3802,9 @@ func (m *kvMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fast, 
 	for k, v := range groupPairs {
 		gid := binary.BigEndian.Uint64([]byte(k[2:]))
 		quota := m.parseQuota(v)
+		if quota.MaxSpace == -1 && quota.MaxInodes == -1 {
+			continue
+		}
 		groupQuotas[gid] = &DumpedQuota{MaxSpace: quota.MaxSpace, MaxInodes: quota.MaxInodes, UsedSpace: quota.UsedSpace, UsedInodes: quota.UsedInodes}
 	}
 

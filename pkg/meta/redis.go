@@ -4706,6 +4706,9 @@ func (m *redisMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fas
 		}
 		var quota DumpedQuota
 		quota.MaxSpace, quota.MaxInodes = m.parseQuota([]byte(v))
+		if quota.MaxSpace == -1 && quota.MaxInodes == -1 {
+			continue
+		}
 		userQuotas[uid] = &quota
 	}
 
@@ -4722,6 +4725,9 @@ func (m *redisMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fas
 		}
 		var quota DumpedQuota
 		quota.MaxSpace, quota.MaxInodes = m.parseQuota([]byte(v))
+		if quota.MaxSpace == -1 && quota.MaxInodes == -1 {
+			continue
+		}
 		groupQuotas[gid] = &quota
 	}
 
