@@ -4741,6 +4741,11 @@ func (m *redisMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fas
 		UserQuotas:  userQuotas,
 		GroupQuotas: groupQuotas,
 	}
+	root = m.checkRoot(root)
+	if root != RootInode {
+		dm.UserQuotas = nil
+		dm.GroupQuotas = nil
+	}
 	if !keepSecret && dm.Setting.SecretKey != "" {
 		dm.Setting.SecretKey = "removed"
 		logger.Warnf("Secret key is removed for the sake of safety")
@@ -4753,7 +4758,6 @@ func (m *redisMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fas
 	if err != nil {
 		return err
 	}
-	root = m.checkRoot(root)
 	progress := utils.NewProgress(false)
 	bar := progress.AddCountBar("Dumped entries", 1) // with root
 	useTotal := root == RootInode && !skipTrash
@@ -4931,6 +4935,11 @@ func (m *redisMeta) LoadMeta(r io.Reader) (err error) {
 	}
 	m.loadDumpedQuotas(ctx, dm.Quotas, dm.UserQuotas, dm.GroupQuotas)
 	if len(dm.UserQuotas) > 0 || len(dm.GroupQuotas) > 0 {
+		// set format before ScanUserGroupUsage, because it needs m.fmt
+		format := dm.Setting
+		m.Lock()
+		m.fmt = &format
+		m.Unlock()
 		if err := m.ScanUserGroupUsage(ctx); err != nil {
 			logger.Warnf("rebuild user/group quota usage failed: %v", err)
 		}

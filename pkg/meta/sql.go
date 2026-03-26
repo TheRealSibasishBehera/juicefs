@@ -4733,6 +4733,11 @@ func (m *dbMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fast, 
 			UserQuotas:  userQuotas,
 			GroupQuotas: groupQuotas,
 		}
+		// Don't export user/group quotas when dumping a subdirectory (not in root directory)
+		if m.root != RootInode {
+			dm.UserQuotas = nil
+			dm.GroupQuotas = nil
+		}
 		if !keepSecret && dm.Setting.SecretKey != "" {
 			dm.Setting.SecretKey = "removed"
 			logger.Warnf("Secret key is removed for the sake of safety")
@@ -4948,6 +4953,11 @@ func (m *dbMeta) LoadMeta(r io.Reader) error {
 	}
 	m.loadDumpedQuotas(Background(), dm.Quotas, dm.UserQuotas, dm.GroupQuotas)
 	if len(dm.UserQuotas) > 0 || len(dm.GroupQuotas) > 0 {
+		// set format before ScanUserGroupUsage, because it needs m.fmt
+		format := dm.Setting
+		m.Lock()
+		m.fmt = &format
+		m.Unlock()
 		if err := m.ScanUserGroupUsage(Background()); err != nil {
 			logger.Warnf("rebuild user/group quota usage failed: %v", err)
 		}

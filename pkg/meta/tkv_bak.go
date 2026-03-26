@@ -426,7 +426,7 @@ func (m *kvMeta) dumpQuota(ctx Context, opt *DumpOption, ch chan<- *dumpedResult
 		tx.scan(m.fmtKey("QU"), nextKey(m.fmtKey("QU")), false, func(k, v []byte) bool {
 			q := &pb.Quota{}
 			q.Type = uint32(UserQuotaType)
-			q.Key = uint64(m.decodeInode([]byte(k)[2:]))
+			q.Key = binary.BigEndian.Uint64([]byte(k)[2:])
 			b := utils.FromBuffer(v)
 			q.MaxSpace = int64(b.Get64())
 			q.MaxInodes = int64(b.Get64())
@@ -439,7 +439,7 @@ func (m *kvMeta) dumpQuota(ctx Context, opt *DumpOption, ch chan<- *dumpedResult
 		tx.scan(m.fmtKey("QG"), nextKey(m.fmtKey("QG")), false, func(k, v []byte) bool {
 			q := &pb.Quota{}
 			q.Type = uint32(GroupQuotaType)
-			q.Key = uint64(m.decodeInode([]byte(k)[2:]))
+			q.Key = binary.BigEndian.Uint64([]byte(k)[2:])
 			b := utils.FromBuffer(v)
 			q.MaxSpace = int64(b.Get64())
 			q.MaxInodes = int64(b.Get64())
