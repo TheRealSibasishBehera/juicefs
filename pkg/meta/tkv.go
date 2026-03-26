@@ -3784,9 +3784,9 @@ func (m *kvMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fast, 
 	}
 	userQuotas := make(map[uint64]*DumpedQuota, len(userPairs))
 	for k, v := range userPairs {
-		uid := m.decodeInode([]byte(k[2:]))
+		uid := binary.BigEndian.Uint64([]byte(k[2:]))
 		quota := m.parseQuota(v)
-		userQuotas[uint64(uid)] = &DumpedQuota{MaxSpace: quota.MaxSpace, MaxInodes: quota.MaxInodes, UsedSpace: quota.UsedSpace, UsedInodes: quota.UsedInodes}
+		userQuotas[uid] = &DumpedQuota{MaxSpace: quota.MaxSpace, MaxInodes: quota.MaxInodes, UsedSpace: quota.UsedSpace, UsedInodes: quota.UsedInodes}
 	}
 
 	groupPairs, err := m.scanValues(ctx, m.fmtKey("QG"), -1, func(k, v []byte) bool {
@@ -3797,9 +3797,9 @@ func (m *kvMeta) DumpMeta(w io.Writer, root Ino, threads int, keepSecret, fast, 
 	}
 	groupQuotas := make(map[uint64]*DumpedQuota, len(groupPairs))
 	for k, v := range groupPairs {
-		gid := m.decodeInode([]byte(k[2:]))
+		gid := binary.BigEndian.Uint64([]byte(k[2:]))
 		quota := m.parseQuota(v)
-		groupQuotas[uint64(gid)] = &DumpedQuota{MaxSpace: quota.MaxSpace, MaxInodes: quota.MaxInodes, UsedSpace: quota.UsedSpace, UsedInodes: quota.UsedInodes}
+		groupQuotas[gid] = &DumpedQuota{MaxSpace: quota.MaxSpace, MaxInodes: quota.MaxInodes, UsedSpace: quota.UsedSpace, UsedInodes: quota.UsedInodes}
 	}
 
 	dm := DumpedMeta{
