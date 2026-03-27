@@ -50,7 +50,7 @@ test_total_inodes(){
         if ! echo $i | tee /jfs/test$i > /dev/null 2>&1; then
             echo "ERROR: Failed to create file /jfs/test$i at iteration $i"
             echo "=== Current quota ==="
-            ./juicefs quota list $META_URL || true
+            ./juicefs quota debug $META_URL || true
             echo "=== Current /jfs/ directory status ==="
             ls -la /jfs/ || true
 	    echo "=== df -i output ==="
@@ -71,7 +71,7 @@ test_total_inodes(){
         if ! echo $i | tee /jfs/test$i > /dev/null 2>&1; then
             echo "ERROR: Failed to create file /jfs/test$i at iteration $i"
             echo "=== Current quota ==="
-            ./juicefs quota list $META_URL || true
+            ./juicefs quota debug $META_URL || true
             echo "=== Current /jfs/ directory status ==="
             ls -la /jfs/ || true
             echo "=== df -i output ==="

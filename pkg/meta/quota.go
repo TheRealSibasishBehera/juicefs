@@ -55,6 +55,45 @@ type iQuota struct {
 	quota *Quota
 }
 
+type QuotaDebugInfo struct {
+	UsedInodes   int64
+	UsedSpace    int64
+	NewInodes    int64
+	NewSpace     int64
+	FormatInodes uint64
+}
+
+func GetQuotaDebugInfo(m Meta) (*QuotaDebugInfo, error) {
+	bm := getBaseMetaForDebug(m)
+	if bm == nil {
+		return nil, fmt.Errorf("quota debug is not supported by this meta client: %T", m)
+	}
+	format := bm.getFormat()
+	if format == nil {
+		return nil, fmt.Errorf("meta format is not loaded")
+	}
+	return &QuotaDebugInfo{
+		UsedInodes:   atomic.LoadInt64(&bm.usedInodes),
+		UsedSpace:    atomic.LoadInt64(&bm.usedSpace),
+		NewInodes:    atomic.LoadInt64(&bm.newInodes),
+		NewSpace:     atomic.LoadInt64(&bm.newSpace),
+		FormatInodes: format.Inodes,
+	}, nil
+}
+
+func getBaseMetaForDebug(m Meta) *baseMeta {
+	switch mm := m.(type) {
+	case *redisMeta:
+		return mm.baseMeta
+	case *dbMeta:
+		return mm.baseMeta
+	case *kvMeta:
+		return mm.baseMeta
+	default:
+		return nil
+	}
+}
+
 // Returns true if it will exceed the quota limit
 func (q *Quota) check(space, inodes int64) bool {
 	if space > 0 {

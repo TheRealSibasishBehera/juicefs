@@ -81,6 +81,12 @@ $ juicefs quota delete redis://localhost --gid 100`,
 				ArgsUsage: "META-URL",
 				Action:    quota,
 			},
+			{
+				Name:      "debug",
+				Usage:     "Print global quota debug counters",
+				ArgsUsage: "META-URL",
+				Action:    quota,
+			},
 		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -121,6 +127,24 @@ $ juicefs quota delete redis://localhost --gid 100`,
 
 func quota(c *cli.Context) error {
 	setup(c, 1)
+	if c.Command.Name == "debug" {
+		removePassword(c.Args().Get(0))
+		m := meta.NewClient(c.Args().Get(0), nil)
+		if _, err := m.Load(true); err != nil {
+			logger.Fatalf("Load setting: %s", err)
+		}
+		info, err := meta.GetQuotaDebugInfo(m)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("usedInodes = %d\n", info.UsedInodes)
+		fmt.Printf("usedSpace = %d\n", info.UsedSpace)
+		fmt.Printf("newInodes = %d\n", info.NewInodes)
+		fmt.Printf("newSpace = %d\n", info.NewSpace)
+		fmt.Printf("format.Inodes = %d\n", info.FormatInodes)
+		return nil
+	}
+
 	var cmd uint8
 	switch c.Command.Name {
 	case "set":
