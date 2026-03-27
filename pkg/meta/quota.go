@@ -279,9 +279,12 @@ func (m *baseMeta) checkQuota(ctx Context, space, inodes int64, uid, gid uint32,
 
 	format := m.getFormat()
 	if space > 0 && format.Capacity > 0 && atomic.LoadInt64(&m.usedSpace)+atomic.LoadInt64(&m.newSpace)+space > int64(format.Capacity) {
+		logger.Warnf("Mknod failed: space %d, inodes %d, uid %d, gid %d, err %v", space, inodes, uid, gid, syscall.ENOSPC)
 		return syscall.ENOSPC
 	}
 	if inodes > 0 && format.Inodes > 0 && atomic.LoadInt64(&m.usedInodes)+atomic.LoadInt64(&m.newInodes)+inodes > int64(format.Inodes) {
+		logger.Warnf("Mknod failed: space %d, inodes %d, uid %d, gid %d, err %v", space, inodes, uid, gid, syscall.ENOSPC)
+		logger.Warnf("usedInodes = %d, newInodes = %d, inodes = %d, format.Inodes = %d", atomic.LoadInt64(&m.usedInodes), atomic.LoadInt64(&m.newInodes), inodes, format.Inodes)
 		return syscall.ENOSPC
 	}
 	if !format.DirStats {

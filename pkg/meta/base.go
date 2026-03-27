@@ -1535,6 +1535,7 @@ func (m *baseMeta) Mknod(ctx Context, parent Ino, name string, _type uint8, mode
 	var space, inodes int64 = align4K(0), 1
 	// check group quota in transaction
 	if err := m.checkQuota(ctx, space, inodes, ctx.Uid(), 0, parent); err != 0 {
+		logger.Warnf("Mknod failed: space %d, inodes %d, uid %d, parent %d, err %v", space, inodes, ctx.Uid(), parent, err)
 		return err
 	}
 	ino, err := m.nextInode()
