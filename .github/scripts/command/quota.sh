@@ -47,7 +47,14 @@ test_total_inodes(){
     ./juicefs mount -d $META_URL /jfs --heartbeat $HEARTBEAT_INTERVAL
     set +x
     for i in {1..1000}; do
-        echo $i | tee /jfs/test$i > /dev/null
+        if ! echo $i | tee /jfs/test$i > /dev/null 2>&1; then
+            echo "ERROR: Failed to create file /jfs/test$i at iteration $i"
+            echo "=== Current config ==="
+            ./juicefs config $META_URL || true
+            echo "=== Current /jfs/ directory status ==="
+            ls -la /jfs/ || true
+            exit 1
+        fi
     done
     set -x
     sleep $VOLUME_QUOTA_FLUSH_INTERVAL
@@ -57,7 +64,18 @@ test_total_inodes(){
     sleep $((HEARTBEAT_INTERVAL+HEARTBEAT_SLEEP))
     set +x
     for i in {1001..2000}; do
-        echo $i | tee /jfs/test$i > /dev/null || (df -i /jfs && ls /jfs/ -l | wc -l  && exit 1)
+        if ! echo $i | tee /jfs/test$i > /dev/null 2>&1; then
+            echo "ERROR: Failed to create file /jfs/test$i at iteration $i"
+            echo "=== Current config ==="
+            ./juicefs config $META_URL || true
+            echo "=== Current /jfs/ directory status ==="
+            ls -la /jfs/ || true
+            echo "=== df -i output ==="
+            df -i /jfs || true
+            echo "=== Current file count ==="
+            ls /jfs/ -l | wc -l || true
+            exit 1
+        fi
     done
     set -x
     sleep $VOLUME_QUOTA_FLUSH_INTERVAL
@@ -169,7 +187,16 @@ test_dir_inodes(){
     sleep $((HEARTBEAT_INTERVAL+HEARTBEAT_SLEEP))
     set +x
     for i in {1..1000}; do
-        echo $i > /jfs/d/test$i > /dev/null
+        if ! echo $i > /jfs/d/test$i > /dev/null 2>&1; then
+            echo "ERROR: Failed to create file /jfs/d/test$i at iteration $i"
+            echo "=== Current quota status ==="
+            ./juicefs quota list $META_URL --path /d || true
+            echo "=== Current /jfs/ directory status ==="
+            ls -la /jfs/ || true
+            echo "=== Current /jfs/d/ directory status ==="
+            ls -la /jfs/d/ 2>/dev/null || true
+            exit 1
+        fi
     done
     set -x
     sleep $DIR_QUOTA_FLUSH_INTERVAL
@@ -180,7 +207,16 @@ test_dir_inodes(){
     sleep $((HEARTBEAT_INTERVAL+HEARTBEAT_SLEEP))
     set +x
     for i in {1001..2000}; do
-        echo $i | tee  /jfs/d/test$i > /dev/null
+        if ! echo $i | tee /jfs/d/test$i > /dev/null 2>&1; then
+            echo "ERROR: Failed to create file /jfs/d/test$i at iteration $i"
+            echo "=== Current quota status ==="
+            ./juicefs quota list $META_URL --path /d || true
+            echo "=== Current /jfs/ directory status ==="
+            ls -la /jfs/ || true
+            echo "=== Current /jfs/d/ directory status ==="
+            ls -la /jfs/d/ 2>/dev/null || true
+            exit 1
+        fi
     done
     set -x
     sleep $DIR_QUOTA_FLUSH_INTERVAL
