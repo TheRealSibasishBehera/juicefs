@@ -72,9 +72,28 @@ func GetQuotaDebugInfo(m Meta) (*QuotaDebugInfo, error) {
 	if format == nil {
 		return nil, fmt.Errorf("meta format is not loaded")
 	}
+
+	// Load counters from storage if they are unknown (-1)
+	spaceVal := atomic.LoadInt64(&bm.usedSpace)
+	inodesVal := atomic.LoadInt64(&bm.usedInodes)
+	if spaceVal == unknownUsage || inodesVal == unknownUsage {
+		if v, err := bm.en.getCounter(usedSpace); err == nil {
+			atomic.StoreInt64(&bm.usedSpace, v)
+			spaceVal = v
+		} else {
+			logger.Warnf("Get counter %s: %s", usedSpace, err)
+		}
+		if v, err := bm.en.getCounter(totalInodes); err == nil {
+			atomic.StoreInt64(&bm.usedInodes, v)
+			inodesVal = v
+		} else {
+			logger.Warnf("Get counter %s: %s", totalInodes, err)
+		}
+	}
+
 	return &QuotaDebugInfo{
-		UsedInodes:   atomic.LoadInt64(&bm.usedInodes),
-		UsedSpace:    atomic.LoadInt64(&bm.usedSpace),
+		UsedInodes:   inodesVal,
+		UsedSpace:    spaceVal,
 		NewInodes:    atomic.LoadInt64(&bm.newInodes),
 		NewSpace:     atomic.LoadInt64(&bm.newSpace),
 		FormatInodes: format.Inodes,
