@@ -341,13 +341,17 @@ type tierStorage struct {
 	tiers map[uint8]Tier
 }
 
-func (b *tierStorage) GetStorageClass(ctx context.Context) string {
+func (b *tierStorage) GetStorageClass(ctx context.Context, defaultSc ...string) string {
 	sc := b.sc
 	if id, ok := ctx.Value(TierKey{}).(uint8); ok {
-		if t, ok := b.tiers[id]; ok {
-			sc = t.Sc
+		if id == 0 && len(defaultSc) > 0 {
+			sc = defaultSc[0]
 		} else {
-			logger.Warnf("invalid tier id: %d", id)
+			if t, ok := b.tiers[id]; ok {
+				sc = t.Sc
+			} else {
+				logger.Warnf("invalid tier id: %d", id)
+			}
 		}
 	}
 	return sc
