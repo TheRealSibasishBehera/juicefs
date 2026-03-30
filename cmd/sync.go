@@ -278,6 +278,19 @@ func syncStorageFlags() []cli.Flag {
 			Name:  "traffic-control-url",
 			Usage: "the url of the traffic control",
 		},
+		&cli.StringFlag{
+			Name:  "encrypt-rsa-key",
+			Usage: "path to RSA/SM2 private key (PEM) for encrypting destination",
+		},
+		&cli.StringFlag{
+			Name:  "decrypt-rsa-key",
+			Usage: "path to RSA/SM2 private key (PEM) for decrypting source",
+		},
+		&cli.StringFlag{
+			Name:  "encrypt-algo",
+			Value: object.AES256GCM_RSA,
+			Usage: "encrypt algorithm (aes256gcm-rsa, chacha20-rsa, sm4gcm)",
+		},
 	})
 }
 
@@ -501,6 +514,32 @@ func doSync(c *cli.Context) error {
 		object.Shutdown(src)
 		object.Shutdown(dst)
 	}()
+	if c.IsSet("decrypt-rsa-key") || c.IsSet("encrypt-rsa-key") {
+		algo := c.String("encrypt-algo")
+		passphrase := os.Getenv("JFS_RSA_PASSPHRASE")
+		if c.IsSet("decrypt-rsa-key") {
+			privKey, err := object.ParseRsaPrivateKeyFromPath(c.String("decrypt-rsa-key"), passphrase)
+			if err != nil {
+				return fmt.Errorf("load decrypt key: %s", err)
+			}
+			encryptor, err := object.NewDataEncryptor(object.NewKeyEncryptor(privKey), algo)
+			if err != nil {
+				return fmt.Errorf("create decryptor: %s", err)
+			}
+			src = object.NewEncrypted(src, encryptor)
+		}
+		if c.IsSet("encrypt-rsa-key") {
+			privKey, err := object.ParseRsaPrivateKeyFromPath(c.String("encrypt-rsa-key"), passphrase)
+			if err != nil {
+				return fmt.Errorf("load encrypt key: %s", err)
+			}
+			encryptor, err := object.NewDataEncryptor(object.NewKeyEncryptor(privKey), algo)
+			if err != nil {
+				return fmt.Errorf("create encryptor: %s", err)
+			}
+			dst = object.NewEncrypted(dst, encryptor)
+		}
+	}
 	if config.StorageClass != "" {
 		if os, ok := dst.(object.SupportStorageClass); ok {
 			err := os.SetStorageClass(config.StorageClass)

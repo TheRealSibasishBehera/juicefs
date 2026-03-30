@@ -17,6 +17,8 @@ package sync
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
 	"fmt"
 	"io"
 	"math"
@@ -795,5 +797,105 @@ func TestFilterSizeAndAge(t *testing.T) {
 
 	if filterKey(&mockObject{200, now.Add(-time.Hour * 2)}, now, nil, config) {
 		t.Fatalf("filterKey should fail")
+	}
+}
+
+// nolint:errcheck
+func TestSyncEncrypt(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA key: %s", err)
+	}
+	kc := object.NewRSAEncryptor(rsaKey)
+	enc, err := object.NewDataEncryptor(kc, object.AES256GCM_RSA)
+	if err != nil {
+		t.Fatalf("create encryptor: %s", err)
+	}
+
+	// sync plaintext src -> encrypted dst
+	src, _ := object.CreateStorage("mem", "", "", "", "")
+	dst, _ := object.CreateStorage("mem", "", "", "", "")
+
+	testData := map[string]string{
+		"file1.txt":     "hello world",
+		"dir/file2.txt": "foo bar baz",
+		"empty.txt":     "x",
+	}
+	for k, v := range testData {
+		src.Put(ctx, k, bytes.NewReader([]byte(v)))
+	}
+
+	encDst := object.NewEncrypted(dst, enc)
+	if err := Sync(src, encDst, &Config{
+		Threads:     10,
+		ListThreads: 1,
+		Update:      true,
+		Limit:       -1,
+		MaxSize:     math.MaxInt64,
+		Quiet:       true,
+	}); err != nil {
+		t.Fatalf("sync to encrypted dst: %s", err)
+	}
+
+	// Verify dst has encrypted data (raw read should differ from plaintext)
+	for k, v := range testData {
+		r, err := dst.Get(ctx, k, 0, -1)
+		if err != nil {
+			t.Fatalf("get raw %s: %s", k, err)
+		}
+		raw, _ := io.ReadAll(r)
+		if string(raw) == v {
+			t.Fatalf("data for %s should be encrypted but got plaintext", k)
+		}
+	}
+
+	// sync encrypted src -> plaintext dst (decrypt)
+	dst2, _ := object.CreateStorage("mem", "", "", "", "")
+	encSrc := object.NewEncrypted(dst, enc) // wrap the encrypted store as source
+	if err := Sync(encSrc, dst2, &Config{
+		Threads:     10,
+		ListThreads: 1,
+		Update:      true,
+		Limit:       -1,
+		MaxSize:     math.MaxInt64,
+		Quiet:       true,
+	}); err != nil {
+		t.Fatalf("sync from encrypted src: %s", err)
+	}
+
+	// Verify dst2 has original plaintext
+	for k, v := range testData {
+		r, err := dst2.Get(ctx, k, 0, -1)
+		if err != nil {
+			t.Fatalf("get decrypted %s: %s", k, err)
+		}
+		data, _ := io.ReadAll(r)
+		if string(data) != v {
+			t.Fatalf("decrypted %s: got %q, want %q", k, string(data), v)
+		}
+	}
+
+	// decrypt with wrong key should fail
+	rsaKey2, _ := rsa.GenerateKey(rand.Reader, 2048)
+	kc2 := object.NewRSAEncryptor(rsaKey2)
+	enc2, _ := object.NewDataEncryptor(kc2, object.AES256GCM_RSA)
+	wrongSrc := object.NewEncrypted(dst, enc2)
+	dst3, _ := object.CreateStorage("mem", "", "", "", "")
+	err = Sync(wrongSrc, dst3, &Config{
+		Threads:     10,
+		ListThreads: 1,
+		Update:      true,
+		Limit:       -1,
+		MaxSize:     math.MaxInt64,
+		Quiet:       true,
+	})
+	// Sync should complete but with failures (wrong key can't decrypt)
+	ch, _ := ListAll(dst3, "", "", "", true)
+	var count int
+	for range ch {
+		count++
+	}
+	if count == len(testData) {
+		t.Fatalf("decrypting with wrong key should not produce all files")
 	}
 }
