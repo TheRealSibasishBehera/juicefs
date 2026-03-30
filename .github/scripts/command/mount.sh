@@ -109,6 +109,9 @@ test_check_storage(){
     start_meta_engine $META minio
     prepare_test
     sleep 2
+    # Clean up any leftover bucket from a previous run
+    (./mc alias set myminio http://127.0.0.1:9000 minioadmin minioadmin && \
+     ./mc rb --force myminio/test 2>/dev/null) || true
     ./juicefs format $META_URL myjfs --storage minio --bucket http://localhost:9000/test \
         --access-key minioadmin --secret-key minioadmin --compress lz4 --hash-prefix
     docker stop minio
@@ -222,6 +225,7 @@ test_close_to_open1()
     hex_file1=$(cat $file1 | hexdump -C)
     [[ "$hex_file2" != "$hex_file1" ]] && echo "Content of $hex_file2 and $hex_file1 do not match" && exit 1 || true
     [[ "$hex_file2_2" != "$hex_file1" ]] && echo "Content of $hex_file2_2 and $hex_file1 do not match" && exit 1 || true
+    umount_jfs /jfs2 "$META_URL"
 }
 
 test_colse_to_open2()
@@ -245,6 +249,7 @@ for i in range(1, 101):
     line_count2=$(cat $file2 | wc -l)
     [[ $line_count1 -ne 200 ]] && cat $file1 && echo "Error: $file1 should have 200 lines but has $line_count1" && exit 1 || true
     [[ $line_count2 -ne 200 ]] && cat $file2 && echo "Error: $file2 should have 200 lines but has $line_count2" && exit 1 || true
+    umount_jfs /jfs2 "$META_URL"
 }
 
 source .github/scripts/common/run_test.sh && run_test $@

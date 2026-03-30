@@ -41,7 +41,8 @@ start_smb_container()
         -s "$SMB_SHARE;/mount;yes;no;no;$SMB_USER" >/dev/null
 
     local container_ip
-    container_ip=$(docker container inspect "$SMB_CONTAINER_NAME" --format '{{ .NetworkSettings.IPAddress }}')
+    container_ip=$(docker container inspect "$SMB_CONTAINER_NAME" --format '{{ .NetworkSettings.IPAddress }}' 2>/dev/null || true)
+    [[ -z "$container_ip" ]] && container_ip=$(docker container inspect "$SMB_CONTAINER_NAME" --format '{{ (index .NetworkSettings.Networks "bridge").IPAddress }}')
     wait_tcp_ready "$container_ip" 445 40
     SMB_ENDPOINT="${container_ip}/${SMB_SHARE}"
     export SMB_ENDPOINT
@@ -159,9 +160,13 @@ skip_test_mount_process_exit_on_format()
 
 test_format_sftp_object()
 {
+    docker rm -f sftp 2>/dev/null || true
     docker run -d --name sftp -p 2222:22 juicedata/ci-sftp
     prepare_test
-    CONTAINER_IP=$(docker container inspect sftp --format '{{ .NetworkSettings.IPAddress }}')
+    rm -rf /var/jfs/new-volume-1 /var/jfsCache/new-volume-1 2>/dev/null || true
+    CONTAINER_IP=$(docker container inspect sftp --format '{{ .NetworkSettings.IPAddress }}' 2>/dev/null || true)
+    [[ -z "$CONTAINER_IP" ]] && CONTAINER_IP=$(docker container inspect sftp --format '{{ (index .NetworkSettings.Networks "bridge").IPAddress }}')
+    local i=1
     echo "round $i"
     ./juicefs format $META_URL volume-$i --storage sftp \
     --bucket $CONTAINER_IP:myjfs/ \
@@ -322,7 +327,8 @@ test_format_cifs_object_recovery()
     docker stop "$SMB_CONTAINER_NAME"
     sleep 8
     docker start "$SMB_CONTAINER_NAME"
-    container_ip=$(docker container inspect "$SMB_CONTAINER_NAME" --format '{{ .NetworkSettings.IPAddress }}')
+    container_ip=$(docker container inspect "$SMB_CONTAINER_NAME" --format '{{ .NetworkSettings.IPAddress }}' 2>/dev/null || true)
+    [[ -z "$container_ip" ]] && container_ip=$(docker container inspect "$SMB_CONTAINER_NAME" --format '{{ (index .NetworkSettings.Networks "bridge").IPAddress }}')
     wait_tcp_ready "$container_ip" 445 40
     sleep 3
 

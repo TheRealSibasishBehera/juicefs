@@ -53,6 +53,7 @@ test_config_secret_key(){
     prepare_test
     set -o pipefail
     ./mc alias set minio http://127.0.0.1:9000 minioadmin minioadmin
+    ./mc rb --force minio/jfs-test 2>/dev/null || true
     ./mc admin user add minio juicedata juicedata
     ./mc admin policy attach minio consoleAdmin --user juicedata
     ./juicefs format --storage minio --bucket http://localhost:9000/jfs-test --access-key juicedata --secret-key juicedata $META_URL myjfs
