@@ -4938,7 +4938,6 @@ func (m *redisMeta) LoadMeta(r io.Reader) (err error) {
 	if _, err = p.Exec(ctx); err != nil {
 		return err
 	}
-
 	// update nlinks and parents for hardlinks
 	st := make(map[Ino]int64)
 	for i, ps := range parents {
