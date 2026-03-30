@@ -83,6 +83,11 @@ $ juicefs tier restore redis://localhost /dir1`,
 				Aliases: []string{"r"},
 				Usage:   "recursively set storage tier for all files and directories under the target directory",
 			},
+			&cli.BoolFlag{
+				Name:    "force",
+				Aliases: []string{"f"},
+				Usage:   "force the setting of the storage level, even if it is the same as the current storage level",
+			},
 		},
 	}
 }
@@ -140,7 +145,7 @@ func setTier(ctx *cli.Context) error {
 		logger.Fatal("only file and directory are supported to set storage tier")
 	}
 	oldTier := format.Tiers[attr.Tier]
-	if attr.Tier == uint8(id) {
+	if !ctx.Bool("force") && attr.Tier == uint8(id) {
 		logger.Infof("storage class of %q is already %d(%s), no change needed", path, id, oldTier.GetHumanSc())
 		return nil
 	}
