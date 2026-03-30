@@ -239,15 +239,14 @@ func visitDir(m meta.Meta, format *meta.Format, objectFunc func(key string) erro
 			if string(e.Name) == "." || string(e.Name) == ".." {
 				continue
 			}
-			if e.Attr.Typ == meta.TypeDirectory || e.Attr.Typ == meta.TypeFile {
-				err := visitEntry(m, format, objectFunc, metaFunc, e.Inode, e.Attr.Length)
-				if err != nil {
+			// after processing the sub-items, then apply metaFunc to the directory itself.
+			if e.Attr.Typ == meta.TypeDirectory && recursive {
+				if err := visitDir(m, format, objectFunc, metaFunc, e.Inode, recursive); err != nil {
 					return err
 				}
 			}
-			if e.Attr.Typ == meta.TypeDirectory && recursive {
-				err := visitDir(m, format, objectFunc, metaFunc, e.Inode, recursive)
-				if err != nil {
+			if e.Attr.Typ == meta.TypeDirectory || e.Attr.Typ == meta.TypeFile {
+				if err := visitEntry(m, format, objectFunc, metaFunc, e.Inode, e.Attr.Length); err != nil {
 					return err
 				}
 			}
