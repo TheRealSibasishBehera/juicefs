@@ -18,11 +18,9 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
-	"syscall"
 
 	"github.com/juicedata/juicefs/pkg/meta"
 	"github.com/juicedata/juicefs/pkg/object"
@@ -240,15 +238,17 @@ func visitDir(m meta.Meta, format *meta.Format, objectFunc func(key string) erro
 			if string(e.Name) == "." || string(e.Name) == ".." {
 				continue
 			}
-			if e.Attr.Typ == meta.TypeDirectory || e.Attr.Typ == meta.TypeFile {
+			if e.Attr.Typ == meta.TypeFile {
 				err := visitEntry(m, format, objectFunc, metaFunc, e.Inode, e.Attr.Length)
 				if err != nil {
 					return err
 				}
 			}
 			if e.Attr.Typ == meta.TypeDirectory && recursive {
-				err := visitDir(m, format, objectFunc, metaFunc, e.Inode, recursive)
-				if err != nil {
+				if err := visitDir(m, format, objectFunc, metaFunc, e.Inode, recursive); err != nil {
+					return err
+				}
+				if err := metaFunc(ino); err != nil {
 					return err
 				}
 			}
@@ -269,8 +269,7 @@ func getObjKeys(m meta.Meta, format *meta.Format, ino meta.Ino, length uint64) [
 					objs = append(objs, k)
 				}
 			}
-		} else if !errors.Is(eno, syscall.EPERM) {
-			//ignore directory which may return EPERM
+		} else {
 			logger.Errorf("read chunk %d of ino %d failed: %s", index, ino, eno)
 		}
 	}
