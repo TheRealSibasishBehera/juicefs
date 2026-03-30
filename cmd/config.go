@@ -18,6 +18,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -204,7 +205,7 @@ func config(ctx *cli.Context) error {
 					if p, err := filepath.Abs(new); err == nil {
 						new = p + "/"
 					} else {
-						logger.Fatalf("Failed to get absolute path of %s: %s", new, err)
+						logger.Fatalf("Failed to get absolute path of %q: %s", new, err)
 					}
 				}
 				msg.WriteString(fmt.Sprintf("%10s: %s -> %s\n", flag, format.Bucket, new))
@@ -350,12 +351,12 @@ func config(ctx *cli.Context) error {
 
 	if !ctx.Bool("force") {
 		yes := ctx.Bool("yes")
-		if storage {
+		if storage || (tier && newSc != "") {
 			blob, err := createStorage(*format)
 			if err != nil {
 				return err
 			}
-			if err = test(blob); err != nil {
+			if err = test(context.WithValue(context.Background(), object.TierKey{}, newTierID), blob); err != nil {
 				return err
 			}
 		}

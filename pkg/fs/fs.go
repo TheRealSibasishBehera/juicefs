@@ -1139,10 +1139,10 @@ func (fs *FileSystem) Warmup(ctx meta.Context, paths []string, numthreads int, b
 	}
 }
 
-func (fs *FileSystem) HandleQuota(ctx meta.Context, path string, cmd uint8, capacity, inodes uint64, strict, repair, create bool) (qs map[string]*meta.Quota, err syscall.Errno) {
+func (fs *FileSystem) HandleQuota(ctx meta.Context, key string, cmd uint8, capacity, inodes uint64, strict, repair, create bool) (qs map[string]*meta.Quota, err syscall.Errno) {
 	l := vfs.NewLogContext(ctx)
 	defer func() {
-		fs.log(l, "QuotaCtl (%s,%d,%d,%d,%t,%t,%t): %s", path, cmd, capacity, inodes, create, repair, strict, errstr(err))
+		fs.log(l, "QuotaCtl (%s,%d,%d,%d,%t,%t,%t): %s", key, cmd, capacity, inodes, create, repair, strict, errstr(err))
 	}()
 	if cmd == meta.QuotaSet && capacity == 0 && inodes == 0 {
 		return nil, syscall.EINVAL
@@ -1156,10 +1156,31 @@ func (fs *FileSystem) HandleQuota(ctx meta.Context, path string, cmd uint8, capa
 		if inodes > 0 {
 			q.MaxInodes = int64(inodes)
 		}
-		qs[path] = q
+		qs[key] = q
 	}
 
-	if _err := fs.m.HandleQuota(meta.Background(), cmd, path, meta.DirQuotaType, qs, strict, repair, create); _err != nil {
+	var qtype uint32
+	var qkey string
+	if strings.HasPrefix(key, "uid:") {
+		qtype = meta.UserQuotaType
+		qkey = key[4:]
+	} else if strings.HasPrefix(key, "gid:") {
+		qtype = meta.GroupQuotaType
+		qkey = key[4:]
+	} else if key != "" {
+		qtype = meta.DirQuotaType
+		qkey = key
+	} else {
+		qkey = ""
+		if cmd == meta.QuotaList {
+			qtype = meta.AllQuotaType
+		} else if cmd == meta.QuotaCheck {
+			qtype = meta.UserQuotaType
+		} else {
+			return nil, syscall.EINVAL
+		}
+	}
+	if _err := fs.m.HandleQuota(meta.Background(), cmd, qkey, qtype, qs, strict, repair, create); _err != nil {
 		if strings.HasPrefix(_err.Error(), "no quota for inode") {
 			return qs, 0
 		}
