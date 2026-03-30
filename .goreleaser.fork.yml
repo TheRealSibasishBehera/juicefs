@@ -46,4 +46,4 @@ release:
     owner: TheRealSibasishBehera
     name: juicefs
 changelog:
-  skip: true
+  disable: true
