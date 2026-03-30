@@ -825,7 +825,7 @@ func TestSyncEncrypt(t *testing.T) {
 		src.Put(ctx, k, bytes.NewReader([]byte(v)))
 	}
 
-	encDst := object.NewEncrypted(dst, enc)
+	encDst := object.NewChunkedEncrypted(dst, enc)
 	if err := Sync(src, encDst, &Config{
 		Threads:     10,
 		ListThreads: 1,
@@ -851,7 +851,7 @@ func TestSyncEncrypt(t *testing.T) {
 
 	// sync encrypted src -> plaintext dst (decrypt)
 	dst2, _ := object.CreateStorage("mem", "", "", "", "")
-	encSrc := object.NewEncrypted(dst, enc) // wrap the encrypted store as source
+	encSrc := object.NewChunkedEncrypted(dst, enc)
 	if err := Sync(encSrc, dst2, &Config{
 		Threads:     10,
 		ListThreads: 1,
@@ -879,7 +879,7 @@ func TestSyncEncrypt(t *testing.T) {
 	rsaKey2, _ := rsa.GenerateKey(rand.Reader, 2048)
 	kc2 := object.NewRSAEncryptor(rsaKey2)
 	enc2, _ := object.NewDataEncryptor(kc2, object.AES256GCM_RSA)
-	wrongSrc := object.NewEncrypted(dst, enc2)
+	wrongSrc := object.NewChunkedEncrypted(dst, enc2)
 	dst3, _ := object.CreateStorage("mem", "", "", "", "")
 	err = Sync(wrongSrc, dst3, &Config{
 		Threads:     10,
@@ -897,5 +897,73 @@ func TestSyncEncrypt(t *testing.T) {
 	}
 	if count == len(testData) {
 		t.Fatalf("decrypting with wrong key should not produce all files")
+	}
+}
+
+// nolint:errcheck
+func TestSyncEncryptLargeFile(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA key: %s", err)
+	}
+	kc := object.NewRSAEncryptor(rsaKey)
+	enc, err := object.NewDataEncryptor(kc, object.AES256GCM_RSA)
+	if err != nil {
+		t.Fatalf("create encryptor: %s", err)
+	}
+
+	src, _ := object.CreateStorage("mem", "", "", "", "")
+	dst, _ := object.CreateStorage("mem", "", "", "", "")
+
+	// Create a large file that spans multiple chunks (>8 MiB)
+	largeData := make([]byte, 9<<20) // 9 MiB
+	for i := range largeData {
+		largeData[i] = byte(i % 253)
+	}
+	src.Put(ctx, "large.bin", bytes.NewReader(largeData))
+
+	encDst := object.NewChunkedEncrypted(dst, enc)
+	if err := Sync(src, encDst, &Config{
+		Threads:     10,
+		ListThreads: 1,
+		Update:      true,
+		Limit:       -1,
+		MaxSize:     math.MaxInt64,
+		Quiet:       true,
+	}); err != nil {
+		t.Fatalf("sync large file to encrypted dst: %s", err)
+	}
+
+	// Verify encrypted data differs from plaintext
+	r, err := dst.Get(ctx, "large.bin", 0, -1)
+	if err != nil {
+		t.Fatalf("get raw large.bin: %s", err)
+	}
+	raw, _ := io.ReadAll(r)
+	if bytes.Equal(raw, largeData) {
+		t.Fatalf("large file should be encrypted")
+	}
+
+	// Decrypt back
+	dst2, _ := object.CreateStorage("mem", "", "", "", "")
+	encSrc := object.NewChunkedEncrypted(dst, enc)
+	if err := Sync(encSrc, dst2, &Config{
+		Threads:     10,
+		ListThreads: 1,
+		Update:      true,
+		Limit:       -1,
+		MaxSize:     math.MaxInt64,
+		Quiet:       true,
+	}); err != nil {
+		t.Fatalf("sync large file from encrypted src: %s", err)
+	}
+
+	r, err = dst2.Get(ctx, "large.bin", 0, -1)
+	if err != nil {
+		t.Fatalf("get decrypted large.bin: %s", err)
+	}
+	got, _ := io.ReadAll(r)
+	if !bytes.Equal(got, largeData) {
+		t.Fatalf("decrypted large file mismatch: got %d bytes, want %d", len(got), len(largeData))
 	}
 }

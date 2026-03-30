@@ -17,6 +17,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	_ "net/http/pprof"
@@ -477,6 +478,27 @@ func isS3PathType(endpoint string) bool {
 	return regexp.MustCompile(pattern).MatchString(endpoint)
 }
 
+func wrapSyncEncryptedStore(store object.ObjectStorage, keyPath, passphraseEnv, mode, algo string) (object.ObjectStorage, error) {
+	if keyPath == "" {
+		return store, nil
+	}
+
+	privKey, err := object.ParseRsaPrivateKeyFromPath(keyPath, os.Getenv(passphraseEnv))
+	if err != nil {
+		if errors.Is(err, object.ErrKeyNeedPasswd) {
+			logger.Fatalf("%s key is password protected, please set %s environment variable", mode, passphraseEnv)
+		}
+		return nil, fmt.Errorf("load %s key: %w", mode, err)
+	}
+
+	encryptor, err := object.NewDataEncryptor(object.NewKeyEncryptor(privKey), algo)
+	if err != nil {
+		return nil, fmt.Errorf("create %sor: %w", mode, err)
+	}
+
+	return object.NewChunkedEncrypted(store, encryptor), nil
+}
+
 func doSync(c *cli.Context) error {
 	setup(c, 2)
 	if c.IsSet("include") && !c.IsSet("exclude") {
@@ -514,31 +536,14 @@ func doSync(c *cli.Context) error {
 		object.Shutdown(src)
 		object.Shutdown(dst)
 	}()
-	if c.IsSet("decrypt-rsa-key") || c.IsSet("encrypt-rsa-key") {
-		algo := c.String("encrypt-algo")
-		passphrase := os.Getenv("JFS_RSA_PASSPHRASE")
-		if c.IsSet("decrypt-rsa-key") {
-			privKey, err := object.ParseRsaPrivateKeyFromPath(c.String("decrypt-rsa-key"), passphrase)
-			if err != nil {
-				return fmt.Errorf("load decrypt key: %s", err)
-			}
-			encryptor, err := object.NewDataEncryptor(object.NewKeyEncryptor(privKey), algo)
-			if err != nil {
-				return fmt.Errorf("create decryptor: %s", err)
-			}
-			src = object.NewEncrypted(src, encryptor)
-		}
-		if c.IsSet("encrypt-rsa-key") {
-			privKey, err := object.ParseRsaPrivateKeyFromPath(c.String("encrypt-rsa-key"), passphrase)
-			if err != nil {
-				return fmt.Errorf("load encrypt key: %s", err)
-			}
-			encryptor, err := object.NewDataEncryptor(object.NewKeyEncryptor(privKey), algo)
-			if err != nil {
-				return fmt.Errorf("create encryptor: %s", err)
-			}
-			dst = object.NewEncrypted(dst, encryptor)
-		}
+	algo := c.String("encrypt-algo")
+	src, err = wrapSyncEncryptedStore(src, c.String("decrypt-rsa-key"), "JFS_DECRYPT_RSA_PASSPHRASE", "decrypt", algo)
+	if err != nil {
+		return err
+	}
+	dst, err = wrapSyncEncryptedStore(dst, c.String("encrypt-rsa-key"), "JFS_ENCRYPT_RSA_PASSPHRASE", "encrypt", algo)
+	if err != nil {
+		return err
 	}
 	if config.StorageClass != "" {
 		if os, ok := dst.(object.SupportStorageClass); ok {

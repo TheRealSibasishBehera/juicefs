@@ -130,6 +130,8 @@ func Shutdown(o ObjectStorage) {
 	switch o := o.(type) {
 	case *encrypted:
 		fn(o.ObjectStorage)
+	case *chunkedEncrypted:
+		fn(o.ObjectStorage)
 	case *withPrefix:
 		fn(o.os)
 	case *sharded:
