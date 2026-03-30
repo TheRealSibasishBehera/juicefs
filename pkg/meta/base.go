@@ -1534,7 +1534,7 @@ func (m *baseMeta) Mknod(ctx Context, parent Ino, name string, _type uint8, mode
 	parent = m.checkRoot(parent)
 	var space, inodes int64 = align4K(0), 1
 	// check group quota in transaction
-	logger.Infof("parent %d, name %s, space %d, inodes %d, uid %d, gid %d. usedinodes = %d", parent, name, space, inodes, ctx.Uid(), ctx.Gid(), atomic.LoadInt64(&m.usedInodes))
+	logger.Infof("parent %d, name %s, space %d, inodes %d, uid %d, gid %d. usedinodes = %d, newinodes = %d", parent, name, space, inodes, ctx.Uid(), ctx.Gid(), atomic.LoadInt64(&m.usedInodes), atomic.LoadInt64(&m.newInodes))
 	if err := m.checkQuota(ctx, space, inodes, ctx.Uid(), 0, parent); err != 0 {
 		logger.Warnf("Mknod failed: space %d, inodes %d, uid %d, parent %d, err %v", space, inodes, ctx.Uid(), parent, err)
 		return err
@@ -1570,6 +1570,7 @@ func (m *baseMeta) Mknod(ctx Context, parent Ino, name string, _type uint8, mode
 	st := m.en.doMknod(ctx, parent, name, _type, mode, cumask, path, inode, attr)
 	if st == 0 {
 		m.en.updateStats(space, inodes)
+		logger.Infof("name = %s, inodes = %d, usedinodes = %d, newinodes = %d", name, inodes, atomic.LoadInt64(&m.usedInodes), atomic.LoadInt64(&m.newInodes))
 		m.updateDirStat(ctx, parent, 0, space, inodes)
 		m.updateDirQuota(ctx, parent, space, inodes)
 		m.updateUserGroupStat(ctx, attr.Uid, attr.Gid, space, inodes)
@@ -1789,6 +1790,7 @@ func (m *baseMeta) BatchClone(ctx Context, srcParent Ino, dstParent Ino, entries
 	st := m.en.doBatchClone(ctx, srcParent, dstParent, entries, cmode, cumask, &r)
 	if st == 0 {
 		m.en.updateStats(r.space, r.inodes)
+		logger.Infof("batch clone inodes = %d, usedinodes = %d, newinodes = %d", r.inodes, atomic.LoadInt64(&m.usedInodes), atomic.LoadInt64(&m.newInodes))
 		m.updateDirQuota(ctx, dstParent, r.space, r.inodes)
 		// TODO
 		for _, q := range r.deltas {
@@ -2915,8 +2917,8 @@ func (m *baseMeta) checkTrash(parent Ino, trash *Ino) syscall.Errno {
 	if st == syscall.ENOENT {
 		attr := Attr{Typ: TypeDirectory, Nlink: 2, Length: 4 << 10, Parent: TrashInode, Full: true}
 		st = m.en.doMknod(Background(), TrashInode, name, TypeDirectory, 0555, 0, "", trash, &attr)
-		logger.Infof("name = %s, usedinodes = %d", name, atomic.LoadInt64(&m.usedInodes))
 		m.en.updateStats(align4K(0), 1)
+		logger.Infof("name = %s, usedinodes = %d", name, atomic.LoadInt64(&m.usedInodes))
 	}
 
 	m.Lock()
@@ -3309,6 +3311,7 @@ func (m *baseMeta) cloneEntry(ctx Context, srcIno Ino, parent Ino, name string, 
 		return eno
 	}
 	m.en.updateStats(align4K(attr.Length), 1)
+	logger.Infof("name = %s, inodes = %d, usedinodes = %d, newinodes = %d", name, 1, atomic.LoadInt64(&m.usedInodes), atomic.LoadInt64(&m.newInodes))
 	atomic.AddUint64(count, 1)
 	m.updateUserGroupStat(ctx, attr.Uid, attr.Gid, align4K(attr.Length), 1)
 	if attr.Typ != TypeDirectory {

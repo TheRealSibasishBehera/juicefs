@@ -1712,6 +1712,7 @@ func (m *redisMeta) doUnlink(ctx Context, parent Ino, name string, attr *Attr, s
 			m.fileDeleted(opened, parent.IsTrash(), inode, attr.Length)
 		}
 		m.updateStats(newSpace, newInode)
+		logger.Infof("name = %s, inodes = %d, usedinodes = %d, newinodes = %d", name, newInode, atomic.LoadInt64(&m.usedInodes), atomic.LoadInt64(&m.newInodes))
 		m.updateUserGroupStat(ctx, attr.Uid, attr.Gid, newSpace, newInode)
 	}
 	return errno(err)
@@ -2074,6 +2075,7 @@ func (m *redisMeta) doBatchUnlink(ctx Context, parent Ino, entries []*Entry, del
 		delta.space += batchDirSpace
 		delta.inodes += batchDirInodes
 		m.updateStats(batchFsSpace, batchFsInodes)
+		logger.Infof("batch unlink inodes = %d, usedinodes = %d, newinodes = %d", batchFsInodes, atomic.LoadInt64(&m.usedInodes), atomic.LoadInt64(&m.newInodes))
 		for _, q := range deltas {
 			m.updateUserGroupStat(ctx, q.Uid, q.Gid, q.Space, q.Inodes)
 		}
@@ -2193,6 +2195,7 @@ func (m *redisMeta) doRmdir(ctx Context, parent Ino, name string, pinode *Ino, o
 	}, m.inodeKey(parent), m.entryKey(parent))
 	if err == nil && trash == 0 {
 		m.updateStats(-align4K(0), -1)
+		logger.Infof("name = %s, inodes = %d, usedinodes = %d, newinodes = %d", name, -1, atomic.LoadInt64(&m.usedInodes), atomic.LoadInt64(&m.newInodes))
 		m.updateUserGroupStat(ctx, attr.Uid, attr.Gid, -align4K(0), -1)
 	}
 	return errno(err)
@@ -2508,6 +2511,7 @@ func (m *redisMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentD
 			m.fileDeleted(opened, false, dino, tattr.Length)
 		}
 		m.updateStats(newSpace, newInode)
+		logger.Infof("name = %s, inodes = %d, usedinodes = %d, newinodes = %d", nameSrc, newInode, atomic.LoadInt64(&m.usedInodes), atomic.LoadInt64(&m.newInodes))
 		m.updateUserGroupStat(ctx, tattr.Uid, tattr.Gid, newSpace, newInode)
 	}
 	return errno(err)
@@ -2823,6 +2827,7 @@ func (m *redisMeta) doDeleteSustainedInode(sid uint64, inode Ino) error {
 	}, m.inodeKey(inode))
 	if err == nil && newSpace < 0 {
 		m.updateStats(newSpace, -1)
+		logger.Infof("deleteSustanined inode, inodes = %d, usedinodes = %d, newinodes = %d", -1, atomic.LoadInt64(&m.usedInodes), atomic.LoadInt64(&m.newInodes))
 		m.tryDeleteFileData(inode, attr.Length, false)
 		m.updateUserGroupStat(ctx, attr.Uid, attr.Gid, newSpace, 0)
 	}
@@ -5100,6 +5105,7 @@ func (m *redisMeta) doCleanupDetachedNode(ctx Context, ino Ino) syscall.Errno {
 		return eno
 	}
 	m.updateStats(-align4K(0), -1)
+	logger.Infof("cleanupDetachedNode inode, inodes = %d, usedinodes = %d, newinodes = %d", -1, atomic.LoadInt64(&m.usedInodes), atomic.LoadInt64(&m.newInodes))
 	return errno(m.txn(ctx, func(tx *redis.Tx) error {
 		_, err := tx.TxPipelined(ctx, func(p redis.Pipeliner) error {
 			p.Del(ctx, m.inodeKey(ino))
