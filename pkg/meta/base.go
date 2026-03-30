@@ -1533,6 +1533,7 @@ func (m *baseMeta) Mknod(ctx Context, parent Ino, name string, _type uint8, mode
 	parent = m.checkRoot(parent)
 	var space, inodes int64 = align4K(0), 1
 	// check group quota in transaction
+	logger.Infof("parent %d, name %s, space %d, inodes %d, uid %d, gid %d. usedinodes = %d", parent, name, space, inodes, ctx.Uid(), ctx.Gid(), atomic.LoadInt64(&m.usedInodes))
 	if err := m.checkQuota(ctx, space, inodes, ctx.Uid(), 0, parent); err != 0 {
 		logger.Warnf("Mknod failed: space %d, inodes %d, uid %d, parent %d, err %v", space, inodes, ctx.Uid(), parent, err)
 		return err
@@ -2913,6 +2914,7 @@ func (m *baseMeta) checkTrash(parent Ino, trash *Ino) syscall.Errno {
 	if st == syscall.ENOENT {
 		attr := Attr{Typ: TypeDirectory, Nlink: 2, Length: 4 << 10, Parent: TrashInode, Full: true}
 		st = m.en.doMknod(Background(), TrashInode, name, TypeDirectory, 0555, 0, "", trash, &attr)
+		logger.Infof("name = %s, usedinodes = %d", name, atomic.LoadInt64(&m.usedInodes))
 		m.en.updateStats(align4K(0), 1)
 	}
 
