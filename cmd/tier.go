@@ -170,9 +170,12 @@ func setTier(ctx *cli.Context) error {
 		if err = visitDir(m, format, objectFunc, metaFunc, ino, ctx.Bool("recursive")); err != nil {
 			return err
 		}
-		if err = metaFunc(ino); err != nil {
-			return err
+		if metaFunc != nil {
+			if err = metaFunc(ino); err != nil {
+				return err
+			}
 		}
+
 	default:
 		logger.Fatal("only file and directory are supported to set storage tier")
 	}
@@ -252,8 +255,10 @@ func visitDir(m meta.Meta, format *meta.Format, objectFunc func(key string) erro
 						return err
 					}
 				}
-				if err := metaFunc(ino); err != nil {
-					return err
+				if metaFunc != nil {
+					if err := metaFunc(e.Inode); err != nil {
+						return err
+					}
 				}
 			}
 		}
