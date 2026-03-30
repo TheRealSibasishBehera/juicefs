@@ -26,6 +26,7 @@ With JuiceFS, massive cloud storage can be directly connected to big data, machi
 8. **Data Encryption**: Supports data encryption in transit and at rest (please refer to [the guide](https://juicefs.com/docs/community/security/encrypt) for more information).
 9. **Global File Locks**: JuiceFS supports both BSD locks (flock) and POSIX record locks (fcntl).
 10. **Data Compression**: JuiceFS supports [LZ4](https://lz4.github.io/lz4) or [Zstandard](https://facebook.github.io/zstd) to compress all your data.
+11. **Volume Fork (Checkpoint & Restore)**: Instantly fork a volume into an independent copy with zero data movement — share pre-fork object blocks via a lease-based scheme while diverging independently. Ideal for checkpointing before risky operations, creating staging environments from production, and running parallel experiments.
 
 ---
 
@@ -88,6 +89,7 @@ If you wanna use JuiceFS in Hadoop, check [Hadoop Java SDK](https://juicefs.com/
 - [FUSE Mount Options](https://juicefs.com/docs/community/fuse_mount_options)
 - [Using JuiceFS on Windows](https://juicefs.com/docs/community/installation#windows)
 - [S3 Gateway](https://juicefs.com/docs/community/s3_gateway)
+- [Volume Fork (Checkpoint & Restore)](https://juicefs.com/docs/community/administration/fork)
 
 Please refer to [JuiceFS Document Center](https://juicefs.com/docs/community/introduction) for more information.
 
