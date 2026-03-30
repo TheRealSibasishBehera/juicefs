@@ -129,6 +129,34 @@ func destroy(ctx *cli.Context) error {
 		logger.Fatalf("create object storage: %s", err)
 	}
 
+	// Detect shared-storage fork: if "forkSharedStorage" counter is set, this
+	// volume's objects live in the source volume's namespace.  Deleting them
+	// would corrupt the source and all sibling forks.  Only wipe metadata.
+	if sharedStorage, _ := m.GetCounter("forkSharedStorage"); sharedStorage > 0 {
+		warn("This volume is a shared-storage fork (objects belong to the source volume).")
+		warn("Only the metadata engine will be reset; object storage will NOT be touched.")
+		if !ctx.Bool("yes") && !userConfirmed() {
+			logger.Fatalln("Aborted.")
+		}
+		if err = m.Reset(); err != nil {
+			logger.Fatalf("reset meta: %s", err)
+		}
+		logger.Infof("Fork metadata has been destroyed. You may need to delete cache directory manually.")
+		logger.Infof("Note: shared objects in %s are still intact (owned by the source volume).", blob)
+		logger.Infof("Run 'juicefs fork release' on the source volume to remove the fork lease.")
+		return nil
+	}
+
+	// Detect source volume that still has active fork leases.  Destroying the
+	// source would delete shared objects that the forks still need.
+	if _, _, hasLeases, leaseErr := LoadForkLeaseInfo(ctx.Context, blob, format.Name); leaseErr != nil {
+		logger.Warnf("check fork leases: %v — proceeding anyway", leaseErr)
+	} else if hasLeases {
+		logger.Fatalf("This volume has active fork leases (see 'juicefs fork list').  "+
+			"Destroying it would corrupt all forked volumes.  "+
+			"Release all forks first with 'juicefs fork release', then retry.")
+	}
+
 	if !ctx.Bool("force") {
 		m.CleanStaleSessions(meta.Background())
 		sessions, err := m.ListSessions()

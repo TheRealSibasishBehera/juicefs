@@ -98,6 +98,40 @@ func gc(ctx *cli.Context) error {
 		logger.Fatalf("object storage: %s", err)
 	}
 	logger.Infof("Data use %s", blob)
+
+	// Determine the effective fork protection threshold.
+	// Two sources: (1) the metadata DB's forkProtectBelow counter (loaded by
+	// NewSession above — covers fork-of-fork scenarios where the source is
+	// itself a fork and must protect its own post-fork chunks for its children)
+	// and (2) active fork leases in the bucket (authoritative for live leases).
+	// We take the MAXIMUM so protection only ever increases.
+	dbThreshold, _ := m.GetCounter("forkProtectBelow")
+	dbCleared, _ := m.GetCounter("forkProtectCleared")
+	dbRearm, _ := m.GetCounter("forkProtectRearm")
+	var gcForkProtect uint64
+	// Protection is active unless cleared>0 AND no rearm since (rearm<=cleared).
+	if dbThreshold > 0 && !(dbCleared > 0 && dbRearm <= dbCleared) {
+		gcForkProtect = uint64(dbThreshold)
+	}
+	if minBase, maxBase, hasLeases, leaseErr := LoadForkLeaseInfo(ctx.Context, blob, format.Name); leaseErr != nil {
+		logger.Warnf("check fork leases: %v — proceeding without fork protection", leaseErr)
+	} else if hasLeases {
+		// Use minBase for the metadata-deletion guard (SetForkProtect) so live
+		// mounts only protect what their own fork tree requires.
+		// Use maxBase for the object-scan guard so no object reachable by ANY
+		// active fork at any level of the tree is deleted.
+		if uint64(minBase) > gcForkProtect {
+			gcForkProtect = uint64(minBase)
+		}
+		if uint64(maxBase) > gcForkProtect {
+			gcForkProtect = uint64(maxBase)
+		}
+	}
+	if gcForkProtect > 0 {
+		logger.Infof("Fork protection active: protecting objects with chunk id <= %d from deletion", gcForkProtect)
+		m.SetForkProtect(gcForkProtect)
+	}
+
 	store := chunk.NewCachedStore(blob, chunkConf, nil)
 
 	// Scan all chunks first and do compaction if necessary
@@ -322,6 +356,15 @@ func gc(ctx *cli.Context) error {
 			size, cobj = ckeys[uint64(cid)]
 		}
 		if size == 0 {
+			// If this chunk's ID is within the fork protection range, a child
+			// fork (checkpoint) may still reference it even though this volume's
+			// metadata no longer has an entry. Skip rather than delete.
+			if gcForkProtect > 0 && uint64(cid) <= gcForkProtect {
+				logger.Debugf("skip fork-protected object: %s (cid=%d <= threshold=%d)", obj.Key(), cid, gcForkProtect)
+				bar.Increment()
+				skipped.IncrInt64(obj.Size())
+				continue
+			}
 			logger.Debugf("find leaked object: %s, size: %d", obj.Key(), obj.Size())
 			foundLeaked(obj)
 			continue

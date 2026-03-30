@@ -120,7 +120,7 @@ func (p *withPrefix) Put(ctx context.Context, key string, in io.Reader, getters 
 }
 
 func (p *withPrefix) Copy(ctx context.Context, dst, src string) error {
-	return p.os.Copy(ctx, dst, src)
+	return p.os.Copy(ctx, p.prefix+dst, p.prefix+src)
 }
 
 func (p *withPrefix) Delete(ctx context.Context, key string, getters ...AttrGetter) error {

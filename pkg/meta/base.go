@@ -351,6 +351,12 @@ type baseMeta struct {
 	bgjobDuration *prometheus.HistogramVec
 
 	en engine
+
+	// forkProtectBelow, when > 0, prevents deleteSlice from deleting any slice
+	// with id <= forkProtectBelow while active fork leases exist.
+	// Protected by the mutex on baseMeta.
+	forkProtectBelow    uint64
+	forkProtectLastLoad time.Time // when we last refreshed from DB
 }
 
 func newBaseMeta(addr string, conf *Config) *baseMeta {
@@ -615,6 +621,66 @@ func (m *baseMeta) getBase() *baseMeta {
 	return m
 }
 
+// GetCounter returns the current value of a named counter.
+// Used by juicefs fork to read nextChunk/nextInode before forking.
+func (m *baseMeta) GetCounter(name string) (int64, error) {
+	return m.en.getCounter(name)
+}
+
+// SetCounter sets a named counter to an exact value.
+// Used by juicefs fork to advance nextChunk/nextInode in the forked DB.
+func (m *baseMeta) SetCounter(name string, value int64) error {
+	current, err := m.en.getCounter(name)
+	if err != nil {
+		return err
+	}
+	if value <= current {
+		return fmt.Errorf("SetCounter: new value %d must be greater than current %d", value, current)
+	}
+	_, err = m.en.incrCounter(name, value-current)
+	return err
+}
+
+// SetForkProtect raises the upper bound of slice IDs that must not be deleted
+// while active fork leases exist.  Protection only increases — if the current
+// threshold is already higher (e.g. loaded from the DB for a fork-of-fork
+// scenario) the existing value is kept.  A value of 0 disables the guard
+// only when the current threshold is also 0.
+func (m *baseMeta) SetForkProtect(maxProtectedSliceID uint64) {
+	m.Lock()
+	if maxProtectedSliceID > m.forkProtectBelow {
+		m.forkProtectBelow = maxProtectedSliceID
+	}
+	m.forkProtectLastLoad = time.Now() // suppress lazy reload for 1 sec
+	m.Unlock()
+}
+
+// ForkProtect returns the current fork protection threshold.
+// It refreshes from the metadata DB at most once per second so that a live
+// mount picks up changes from concurrent fork create/release operations.
+// Returns 0 when protection is disabled (no active leases).
+func (m *baseMeta) ForkProtect() uint64 {
+	m.Lock()
+	defer m.Unlock()
+	if time.Since(m.forkProtectLastLoad) > time.Second {
+		threshold, err1 := m.en.getCounter("forkProtectBelow")
+		cleared, err2 := m.en.getCounter("forkProtectCleared")
+		rearm, err3 := m.en.getCounter("forkProtectRearm")
+		if err1 == nil && err2 == nil && err3 == nil {
+			// Protection is disabled only when cleared > 0 AND no new fork has
+			// been created since (rearm <= cleared). A new fork increments rearm
+			// to be > cleared, re-enabling protection.
+			if cleared > 0 && rearm <= cleared {
+				m.forkProtectBelow = 0 // all leases released, no new forks since
+			} else {
+				m.forkProtectBelow = uint64(threshold)
+			}
+		}
+		m.forkProtectLastLoad = time.Now()
+	}
+	return m.forkProtectBelow
+}
+
 func (m *baseMeta) checkRoot(inode Ino) Ino {
 	switch inode {
 	case 0:
@@ -773,6 +839,19 @@ func (m *baseMeta) NewSession(record bool) error {
 	go m.flushDirStat(ctx)
 	go m.flushQuotas(ctx)
 	m.startDeleteSliceTasks() // start MaxDeletes tasks
+
+	// Load persistent fork protection threshold so the live mount also
+	// respects it when deleting slices (not only juicefs gc).
+	if threshold, err1 := m.en.getCounter("forkProtectBelow"); err1 == nil && threshold > 0 {
+		cleared, err2 := m.en.getCounter("forkProtectCleared")
+		rearm, err3 := m.en.getCounter("forkProtectRearm")
+		// Protection is active unless cleared > 0 AND no new fork was created
+		// since (rearm <= cleared). A new fork sets rearm > cleared to re-arm.
+		if err2 == nil && err3 == nil && !(cleared > 0 && rearm <= cleared) {
+			m.SetForkProtect(uint64(threshold))
+			logger.Infof("fork protection active: protecting slices with id <= %d", threshold)
+		}
+	}
 
 	if !m.conf.NoBGJob {
 		m.sessWG.Add(4)
@@ -2821,6 +2900,13 @@ func (m *baseMeta) tryDeleteFileData(inode Ino, length uint64, force bool) {
 }
 
 func (m *baseMeta) deleteSlice_(id uint64, size uint32) {
+	// Check fork protection here so it covers both the direct call path and
+	// the async worker path (startDeleteSliceTasks workers call deleteSlice_
+	// directly, bypassing deleteSlice).
+	if protect := m.ForkProtect(); protect > 0 && id <= protect {
+		logger.Debugf("skip deleting slice %d (fork-protected, threshold %d)", id, protect)
+		return
+	}
 	if err := m.newMsg(DeleteSlice, id, size); err != nil {
 		logger.Warnf("Delete data blocks of slice %d (%d bytes): %s", id, size, err)
 		return
@@ -2832,6 +2918,10 @@ func (m *baseMeta) deleteSlice_(id uint64, size uint32) {
 
 func (m *baseMeta) deleteSlice(id uint64, size uint32) {
 	if id == 0 || m.conf.MaxDeletes == 0 {
+		return
+	}
+	if protect := m.ForkProtect(); protect > 0 && id <= protect {
+		logger.Debugf("skip deleting slice %d (fork-protected, threshold %d)", id, protect)
 		return
 	}
 	m.dSliceMu.Lock()

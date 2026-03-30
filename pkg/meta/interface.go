@@ -527,6 +527,18 @@ type Meta interface {
 
 	// getBase return the base engine.
 	getBase() *baseMeta
+
+	// GetCounter returns the current value of a named internal counter.
+	// Intended for use by juicefs fork to snapshot nextChunk/nextInode.
+	GetCounter(name string) (int64, error)
+	// SetCounter advances a named internal counter to the given value.
+	// value must be strictly greater than the current counter value.
+	// Intended for use by juicefs fork to diverge ID spaces.
+	SetCounter(name string, value int64) error
+	// SetForkProtect sets the minimum slice ID threshold below which GC will
+	// not delete slices.  Used by juicefs gc when active fork leases exist.
+	SetForkProtect(maxProtectedSliceID uint64)
+
 	InitMetrics(registerer prometheus.Registerer)
 	InitSharedMetrics(registerer prometheus.Registerer)
 
