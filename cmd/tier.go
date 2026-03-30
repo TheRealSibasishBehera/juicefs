@@ -167,10 +167,11 @@ func setTier(ctx *cli.Context) error {
 	case meta.TypeFile:
 		err = visitEntry(m, format, objectFunc, metaFunc, ino, attr.Length)
 	case meta.TypeDirectory:
-		if err = metaFunc(ino); err != nil {
+		err = visitDir(m, format, objectFunc, metaFunc, ino, ctx.Bool("recursive"))
+		if err != nil {
 			return err
 		}
-		err = visitDir(m, format, objectFunc, metaFunc, ino, ctx.Bool("recursive"))
+		err = metaFunc(ino)
 	default:
 		logger.Fatal("only file and directory are supported to set storage tier")
 	}
