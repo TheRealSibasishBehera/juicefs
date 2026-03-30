@@ -246,9 +246,11 @@ func visitDir(m meta.Meta, format *meta.Format, objectFunc func(key string) erro
 					return err
 				}
 			}
-			if e.Attr.Typ == meta.TypeDirectory && recursive {
-				if err := visitDir(m, format, objectFunc, metaFunc, e.Inode, recursive); err != nil {
-					return err
+			if e.Attr.Typ == meta.TypeDirectory {
+				if recursive {
+					if err := visitDir(m, format, objectFunc, metaFunc, e.Inode, recursive); err != nil {
+						return err
+					}
 				}
 				if err := metaFunc(ino); err != nil {
 					return err
