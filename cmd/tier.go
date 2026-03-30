@@ -170,10 +170,8 @@ func setTier(ctx *cli.Context) error {
 		if err = visitDir(m, format, objectFunc, metaFunc, ino, ctx.Bool("recursive")); err != nil {
 			return err
 		}
-		if metaFunc != nil {
-			if err = metaFunc(ino); err != nil {
-				return err
-			}
+		if err = metaFunc(ino); err != nil {
+			return err
 		}
 
 	default:
