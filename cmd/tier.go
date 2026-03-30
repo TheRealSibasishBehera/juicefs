@@ -262,9 +262,6 @@ func getObjKeys(m meta.Meta, format *meta.Format, ino meta.Ino, length uint64) [
 	var objs []string
 	for index := uint64(0); index*meta.ChunkSize < length; index++ {
 		var cs []meta.Slice
-		if ino == 2059 {
-			fmt.Println(1111)
-		}
 		if eno := m.Read(meta.Background(), ino, uint32(index), &cs); eno == 0 {
 			for _, c := range cs {
 				for _, o := range vfs.CalcObjects(*format, c.Id, c.Size, c.Off, c.Len) {
