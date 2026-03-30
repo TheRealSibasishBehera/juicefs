@@ -17,28 +17,9 @@ builds:
     main: .
     goos: [linux]
     goarch: [arm64]
-  - id: juicefs-darwin-amd64
-    ldflags: -s -w -X github.com/juicedata/juicefs/pkg/version.version={{.Version}} -X github.com/juicedata/juicefs/pkg/version.revision={{.ShortCommit}}
-    main: .
-    goos: [darwin]
-    goarch: [amd64]
-  - id: juicefs-darwin-arm64
-    ldflags: -s -w -X github.com/juicedata/juicefs/pkg/version.version={{.Version}} -X github.com/juicedata/juicefs/pkg/version.revision={{.ShortCommit}}
-    main: .
-    goos: [darwin]
-    goarch: [arm64]
-  - id: juicefs-windows-amd64
-    ldflags: -s -w -X github.com/juicedata/juicefs/pkg/version.version={{.Version}} -X github.com/juicedata/juicefs/pkg/version.revision={{.ShortCommit}}
-    flags: [-buildmode, exe]
-    main: .
-    goos: [windows]
-    goarch: [amd64]
 archives:
   - id: juicefs
     name_template: "juicefs-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
-    format_overrides:
-      - goos: windows
-        format: zip
 checksum:
   name_template: "checksums.txt"
 release:
