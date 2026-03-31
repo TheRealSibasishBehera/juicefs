@@ -143,13 +143,15 @@ func forkCreate(ctx *cli.Context) error {
 
 	// 1. Load source format
 	srcMeta := meta.NewClient(srcURI, meta.DefaultConf())
+	defer srcMeta.Shutdown() //nolint:errcheck
 	srcFormat, err := srcMeta.Load(true)
 	if err != nil {
 		return fmt.Errorf("load source format: %w", err)
 	}
 
 	// 2. Ensure destination is empty (same guard as juicefs load)
-	dstMeta := meta.NewClient(dstURI, nil)
+	dstMeta := meta.NewClient(dstURI, meta.DefaultConf())
+	defer dstMeta.Shutdown() //nolint:errcheck
 	if existingFmt, err := dstMeta.Load(false); err == nil {
 		return fmt.Errorf("destination %s is already used by volume %s — use an empty metadata store",
 			utils.RemovePassword(dstURI), existingFmt.Name)
@@ -174,6 +176,13 @@ func forkCreate(ctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("list existing fork leases: %w", err)
 	}
+	// forkIndex determines the chunk/inode ID space offset for this fork.
+	// It is 1-based: source uses offset 0, first fork uses offset 1, etc.
+	// NOTE: two concurrent `juicefs fork` invocations against the same source
+	// can compute the same forkIndex (no distributed lock exists). The docs
+	// warn against this. The UUID assigned to each fork ensures lease objects
+	// never collide, but the chunk ID ranges would overlap. Avoid running
+	// fork create twice simultaneously against the same source.
 	forkIndex := int64(len(existingLeases)) + 1 // 1-based
 
 	// 5. Build fork identifiers
@@ -204,6 +213,9 @@ func forkCreate(ctx *cli.Context) error {
 	}()
 
 	if err := dstMeta.LoadMeta(pr); err != nil {
+		// Close pr so the dump goroutine unblocks and exits cleanly.
+		_ = pr.CloseWithError(err)
+		<-dumpErr
 		return fmt.Errorf("load metadata into destination: %w", err)
 	}
 	if err := <-dumpErr; err != nil {
@@ -308,6 +320,9 @@ func forkCreate(ctx *cli.Context) error {
 	} else {
 		logger.Infof("Persisted forkProtectBelow=%d in fork metadata DB", forkBaseChunk)
 	}
+
+	// dstMeta.Shutdown() is called via defer above, which flushes the SQLite
+	// WAL before the process exits, making the .db file self-contained.
 
 	logger.Infof("Fork created successfully:")
 	logger.Infof("  Source:     %s (%s)", srcFormat.Name, srcFormat.UUID)
@@ -485,11 +500,6 @@ func listForkLeases(ctx context.Context, blob object.ObjectStorage, volumeName s
 		leases = append(leases, l)
 	}
 	return leases, nil
-}
-
-func countForkLeases(ctx context.Context, blob object.ObjectStorage, volumeName string) (int64, error) {
-	leases, err := listForkLeases(ctx, blob, volumeName)
-	return int64(len(leases)), err
 }
 
 // LoadForkLeaseInfo is exported so gc.go can call it without import cycles.

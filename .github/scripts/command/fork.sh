@@ -2219,4 +2219,75 @@ test_fork_gc_cleans_up_after_all_forks_released() {
     flush_fork_sqlite_dbs
 }
 
+# =============================================================================
+# test_fork_sqlite_wal_checkpoint
+#
+# Verifies that after `juicefs fork`, the destination SQLite .db file is
+# fully self-contained (WAL checkpointed). Copying just the .db file —
+# without the -wal and -shm sidecars — must produce a mountable volume
+# with all pre-fork data intact.
+#
+# Background: SQLite WAL mode writes data to a -wal sidecar first. Without
+# an explicit db.Close(), only the .db header is flushed and the main file
+# appears empty ("database is not formatted"). The fix calls dstMeta.Shutdown()
+# at the end of forkCreate to force the checkpoint.
+# =============================================================================
+test_fork_sqlite_wal_checkpoint() {
+    [[ "$META" != "sqlite3" ]] && echo "Skip: WAL test only relevant for sqlite3" && return 0
+
+    setup_two_mounts
+
+    ./juicefs format $META_URL myjfs --trash-days 0
+    ./juicefs mount -d $META_URL $MNT_ORIG --no-usage-report
+    sleep 1
+
+    # Write some data so there is real metadata in the fork DB
+    mkdir -p $MNT_ORIG/waldir
+    for i in {1..10}; do echo "wal-content-$i" > $MNT_ORIG/waldir/file$i.txt; done
+    sync
+    umount_jfs $MNT_ORIG "$META_URL"
+
+    # Create fork
+    ./juicefs fork $META_URL $FORK_META_URL --name wal-ckpt-test
+
+    FORK_DB_PATH="${FORK_META_URL#sqlite3://}"
+
+    # After fork, -wal and -shm must not exist (checkpoint was done)
+    if [[ -f "${FORK_DB_PATH}-wal" ]]; then
+        echo "<FATAL> ${FORK_DB_PATH}-wal still exists after fork — WAL not checkpointed"
+        exit 1
+    fi
+    echo "No -wal sidecar after fork — OK"
+
+    # Copy only the .db file to simulate a user transferring just fork.db
+    local COPY_DB=/tmp/jfs-fork-wal-copy.db
+    rm -f "$COPY_DB" "${COPY_DB}-wal" "${COPY_DB}-shm"
+    cp "$FORK_DB_PATH" "$COPY_DB"
+
+    # Mount the single-file copy — must work and show all pre-fork files
+    mkdir -p $MNT_FORK
+    ./juicefs mount -d "sqlite3://$COPY_DB" $MNT_FORK --no-usage-report
+    sleep 1
+
+    local count
+    count=$(ls $MNT_FORK/waldir/ 2>/dev/null | wc -l)
+    if [[ "$count" -ne 10 ]]; then
+        echo "<FATAL> expected 10 files in fork copy, got $count — WAL data not in .db"
+        exit 1
+    fi
+    echo "All 10 files visible from single-file fork copy — OK"
+
+    local content
+    content=$(cat $MNT_FORK/waldir/file1.txt)
+    if [[ "$content" != "wal-content-1" ]]; then
+        echo "<FATAL> unexpected content in fork copy: $content"
+        exit 1
+    fi
+    echo "File content correct — OK"
+
+    umount_jfs $MNT_FORK "sqlite3://$COPY_DB"
+    rm -f "$COPY_DB"
+    flush_fork_sqlite_dbs
+}
+
 source .github/scripts/common/run_test.sh && run_test $@
