@@ -225,7 +225,7 @@ chs[5] <- &counter{"nextInode", forkNextInode}
 For multiple forks of the same original, each gets a unique `forkIndex`, so their
 counter ranges never overlap with each other or with the original.
 
-### Component 3 — `juicefs fork` Command
+### Component 3 — `juicefs fork` Commands
 
 ```
 juicefs fork <src-meta> <dst-meta> [--name <fork-name>]
@@ -257,6 +257,51 @@ juicefs fork <src-meta> <dst-meta> [--name <fork-name>]
 **Cost**: one `dump` + `load` (metadata only, no object reads), one lease write.
 No object copying. No data transfer. Sub-second for small volumes; scales with metadata
 size only.
+
+### Deferred flow: `fork dump` + `fork load`
+
+To split fork creation into two stages without losing GC safety:
+
+```
+juicefs fork dump <src-meta> --path <dump-file> [--name <fork-name>] [--binary]
+juicefs fork load <dst-meta> --path <dump-file>
+```
+
+`fork dump` performs lease reservation first, then writes metadata dump + sidecar manifest:
+
+```
+<dump-file>.fork.json
+```
+
+Manifest schema:
+
+```json
+{
+  "version": 1,
+  "dumpPath": "meta.dump",
+  "dumpFormat": "json|binary",
+  "createdAt": "RFC3339",
+  "sourceName": "...",
+  "sourceUUID": "...",
+  "forkUUID": "...",
+  "forkName": "...",
+  "forkBaseChunk": 123,
+  "forkBaseInode": 456,
+  "forkIndex": 1,
+  "forkCounterOffset": 1099511627776
+}
+```
+
+`fork load` reads this manifest, loads metadata into an empty destination DB, then patches:
+
+- `UUID = forkUUID`
+- `nextChunk = forkBaseChunk + forkIndex * forkCounterOffset`
+- `nextInode = forkBaseInode + forkIndex * forkCounterOffset`
+- `forkSharedStorage = 1`
+- `forkProtectBelow = forkBaseChunk`
+
+If `fork dump` fails after lease creation, it attempts to delete the lease and sets
+`forkProtectCleared=1` when no leases remain.
 
 ### Component 4 — Fix `prefix.go` Copy Bug
 

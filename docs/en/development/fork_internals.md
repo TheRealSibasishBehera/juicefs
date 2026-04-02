@@ -260,6 +260,46 @@ fork release SRC --fork-name my-fork
 
 ---
 
+## Fork dump/load (deferred): step-by-step
+
+```
+fork dump SRC --path meta.dump [--name my-fork] [--binary]
+│
+├─ 1. Load SRC format and read forkBaseChunk / forkBaseInode
+├─ 2. List existing leases → compute forkIndex
+├─ 3. Generate forkUUID and forkName
+├─ 4. Write lease JSON immediately:
+│      <volumeName>/_forks/<forkUUID>/lease
+├─ 5. Update source protection counters:
+│      - forkProtectBelow = max(existing, forkBaseChunk)
+│      - forkProtectRearm = forkProtectCleared + 1 (if needed)
+├─ 6. Dump metadata to --path (json or binary)
+└─ 7. Write sidecar manifest: <path>.fork.json
+```
+
+```
+fork load DST --path meta.dump
+│
+├─ 1. Read and validate <path>.fork.json
+├─ 2. Ensure DST metadata is empty
+├─ 3. Load dump into DST (LoadMeta / LoadMetaV2)
+├─ 4. Patch DST:
+│      - UUID = forkUUID
+│      - nextChunk = forkBaseChunk + forkIndex × 2^40
+│      - nextInode = forkBaseInode + forkIndex × 2^40
+│      - forkSharedStorage = 1
+│      - forkProtectBelow = forkBaseChunk
+└─ 5. Shutdown DST meta to flush SQLite WAL/checkpoint
+```
+
+Manifest keys:
+
+`version`, `dumpPath`, `dumpFormat`, `createdAt`, `sourceName`, `sourceUUID`,
+`forkUUID`, `forkName`, `forkBaseChunk`, `forkBaseInode`, `forkIndex`,
+`forkCounterOffset`.
+
+---
+
 ## Metadata dump/load pipe
 
 `fork create` uses an in-memory pipe rather than a temp file to pass the metadata dump from source to destination:
@@ -304,6 +344,7 @@ Both the source and the fork resolve object paths using the same `<volumeName>/c
 | Scenario | Effect | Recovery |
 |----------|--------|----------|
 | `fork create` crashes after lease write but before counter writes | Lease exists, DST may be partially loaded or unprotected | Delete the lease manually (`juicefs fork release`), repeat fork |
+| `fork dump` fails after lease write | Temporary protection may remain | Command tries to delete lease and, if no leases remain, sets `forkProtectCleared=1`; rerun `fork dump` |
 | `fork release` crashes after lease delete | Lease gone, `forkProtectCleared` may not be set | Manually set `forkProtectCleared = 1` in source DB via `juicefs config`, then GC |
 | Source DB counter `forkProtectBelow` lost (DB reset) | GC falls back to bucket scan on next run — leases still protect objects | No action needed; GC reads leases from bucket |
 | Fork DB counter `forkProtectBelow` lost | Fork's `deleteSlice_` loses DB protection | GC on the fork still reads bucket leases and skips protected objects; live-mount deleteSlice_ has no DB fallback — re-set counter via `juicefs config` |

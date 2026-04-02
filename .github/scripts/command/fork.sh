@@ -2097,6 +2097,205 @@ test_fork_compact_source_fork_reads_correctly() {
 }
 
 # =============================================================================
+# test_fork_deferred_dump_load
+#
+# fork dump/load should:
+#   1) write dump + manifest + lease
+#   2) load into an empty destination DB
+#   3) produce a mountable shared-storage fork
+# =============================================================================
+test_fork_deferred_dump_load() {
+    local DUMP_PATH=/tmp/jfs-fork-deferred.json.gz
+    local MANIFEST_PATH=${DUMP_PATH}.fork.json
+
+    setup_two_mounts
+    rm -f "$DUMP_PATH" "$MANIFEST_PATH"
+
+    ./juicefs format $META_URL myjfs --trash-days 0
+    ./juicefs mount -d $META_URL $MNT_ORIG --no-usage-report
+    sleep 1
+
+    mkdir -p $MNT_ORIG/deferred
+    echo "deferred-flow" > $MNT_ORIG/deferred/file.txt
+    sync
+    umount_jfs $MNT_ORIG "$META_URL"
+
+    ./juicefs fork dump $META_URL --path "$DUMP_PATH" --name deferred-fork
+    assert_file_exists "$DUMP_PATH"
+    assert_file_exists "$MANIFEST_PATH"
+
+    FORK_LIST=$(./juicefs fork list $META_URL)
+    if [[ "$FORK_LIST" != *"deferred-fork"* ]]; then
+        echo "<FATAL> fork list does not contain deferred-fork after fork dump"
+        exit 1
+    fi
+
+    ./juicefs fork load $FORK_META_URL --path "$DUMP_PATH"
+    ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
+    sleep 1
+
+    assert_file_exists $MNT_FORK/deferred/file.txt
+    assert_eq "deferred fork content" "$(cat $MNT_FORK/deferred/file.txt)" "deferred-flow"
+
+    FORK_UUID=$(./juicefs status $FORK_META_URL 2>&1 | grep -oP '"UUID":\s*"[^"]+"' | grep -oP '[0-9a-f-]{36}' | head -1)
+    if [[ -z "$FORK_UUID" ]]; then
+        echo "<FATAL> could not get fork UUID from deferred fork volume"
+        exit 1
+    fi
+
+    umount_jfs $MNT_FORK "$FORK_META_URL"
+    ./juicefs destroy --yes "$FORK_META_URL" "$FORK_UUID"
+    ./juicefs fork release $META_URL --fork-name deferred-fork
+
+    rm -f "$DUMP_PATH" "$MANIFEST_PATH"
+    flush_fork_sqlite_dbs
+}
+
+# =============================================================================
+# test_fork_dump_lease_protects_before_load
+#
+# Lease written by fork dump must protect pre-fork objects from source GC
+# even before fork load is executed.
+# =============================================================================
+test_fork_dump_lease_protects_before_load() {
+    local DUMP_PATH=/tmp/jfs-fork-preload.json
+    local MANIFEST_PATH=${DUMP_PATH}.fork.json
+
+    setup_two_mounts
+    rm -f "$DUMP_PATH" "$MANIFEST_PATH"
+
+    ./juicefs format $META_URL myjfs --trash-days 0
+    ./juicefs mount -d $META_URL $MNT_ORIG --no-usage-report
+    sleep 1
+
+    echo "protected-before-load" > $MNT_ORIG/protected-before-load.txt
+    sync
+    umount_jfs $MNT_ORIG "$META_URL"
+
+    ./juicefs fork dump $META_URL --path "$DUMP_PATH" --name pre-load-protect
+
+    # Delete from source metadata and run GC while lease is active (before load).
+    ./juicefs mount -d $META_URL $MNT_ORIG --no-usage-report
+    sleep 1
+    rm -f $MNT_ORIG/protected-before-load.txt
+    sync
+    umount_jfs $MNT_ORIG "$META_URL"
+    JFS_GC_SKIPPEDTIME=0 ./juicefs gc $META_URL --delete
+
+    # Now load fork and verify protected content is still readable.
+    ./juicefs fork load $FORK_META_URL --path "$DUMP_PATH"
+    ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
+    sleep 1
+    assert_file_exists $MNT_FORK/protected-before-load.txt
+    assert_eq "pre-load lease protection" \
+        "$(cat $MNT_FORK/protected-before-load.txt)" "protected-before-load"
+
+    FORK_UUID=$(./juicefs status $FORK_META_URL 2>&1 | grep -oP '"UUID":\s*"[^"]+"' | grep -oP '[0-9a-f-]{36}' | head -1)
+    if [[ -z "$FORK_UUID" ]]; then
+        echo "<FATAL> could not get fork UUID from loaded deferred fork"
+        exit 1
+    fi
+
+    umount_jfs $MNT_FORK "$FORK_META_URL"
+    ./juicefs destroy --yes "$FORK_META_URL" "$FORK_UUID"
+    ./juicefs fork release $META_URL --fork-name pre-load-protect
+
+    rm -f "$DUMP_PATH" "$MANIFEST_PATH"
+    flush_fork_sqlite_dbs
+}
+
+# =============================================================================
+# test_fork_deferred_load_corrupt_dump
+#
+# Corrupted dump file must cause fork load to fail.
+# =============================================================================
+test_fork_deferred_load_corrupt_dump() {
+    local DUMP_PATH=/tmp/jfs-fork-corrupt.json
+    local MANIFEST_PATH=${DUMP_PATH}.fork.json
+
+    setup_two_mounts
+    rm -f "$DUMP_PATH" "$MANIFEST_PATH"
+
+    ./juicefs format $META_URL myjfs --trash-days 0
+    ./juicefs mount -d $META_URL $MNT_ORIG --no-usage-report
+    sleep 1
+    echo "corrupt-me" > $MNT_ORIG/corrupt.txt
+    sync
+    umount_jfs $MNT_ORIG "$META_URL"
+
+    ./juicefs fork dump $META_URL --path "$DUMP_PATH" --name deferred-corrupt
+    # Overwrite with malformed JSON so load must fail deterministically.
+    printf '{invalid-json\n' > "$DUMP_PATH"
+
+    if ./juicefs fork load $FORK_META_URL --path "$DUMP_PATH" 2>&1; then
+        echo "<FATAL> fork load should fail on corrupted dump data"
+        exit 1
+    fi
+    echo "fork load failed on corrupted dump as expected — OK"
+
+    ./juicefs fork release $META_URL --fork-name deferred-corrupt
+    python3 .github/scripts/flush_meta.py "$FORK_META_URL" 2>/dev/null || true
+    rm -f "$DUMP_PATH" "$MANIFEST_PATH"
+    flush_fork_sqlite_dbs
+}
+
+# =============================================================================
+# test_fork_deferred_load_sqlite_wal_checkpoint
+#
+# After fork load to sqlite destination, DB should be self-contained without
+# requiring -wal/-shm sidecars.
+# =============================================================================
+test_fork_deferred_load_sqlite_wal_checkpoint() {
+    [[ "$META" != "sqlite3" ]] && echo "Skip: WAL checkpoint test only for sqlite3" && return 0
+
+    local DUMP_PATH=/tmp/jfs-fork-deferred-wal.json
+    local MANIFEST_PATH=${DUMP_PATH}.fork.json
+    local COPY_DB=/tmp/jfs-fork-deferred-wal-copy.db
+
+    setup_two_mounts
+    rm -f "$DUMP_PATH" "$MANIFEST_PATH" "$COPY_DB" "${COPY_DB}-wal" "${COPY_DB}-shm"
+
+    ./juicefs format $META_URL myjfs --trash-days 0
+    ./juicefs mount -d $META_URL $MNT_ORIG --no-usage-report
+    sleep 1
+    mkdir -p $MNT_ORIG/waltest
+    for i in {1..10}; do echo "deferred-wal-$i" > $MNT_ORIG/waltest/file$i.txt; done
+    sync
+    umount_jfs $MNT_ORIG "$META_URL"
+
+    ./juicefs fork dump $META_URL --path "$DUMP_PATH" --name deferred-wal
+    ./juicefs fork load $FORK_META_URL --path "$DUMP_PATH"
+
+    FORK_DB_PATH="${FORK_META_URL#sqlite3://}"
+    if [[ -f "${FORK_DB_PATH}-wal" ]]; then
+        echo "<FATAL> ${FORK_DB_PATH}-wal still exists after fork load"
+        exit 1
+    fi
+    if [[ -f "${FORK_DB_PATH}-shm" ]]; then
+        echo "<FATAL> ${FORK_DB_PATH}-shm still exists after fork load"
+        exit 1
+    fi
+    echo "No sqlite -wal/-shm sidecars after fork load — OK"
+
+    cp "$FORK_DB_PATH" "$COPY_DB"
+    ./juicefs mount -d "sqlite3://$COPY_DB" $MNT_FORK --no-usage-report
+    sleep 1
+    COUNT=$(ls $MNT_FORK/waltest/ 2>/dev/null | wc -l)
+    if [[ "$COUNT" -ne 10 ]]; then
+        echo "<FATAL> expected 10 files in deferred fork sqlite copy, got $COUNT"
+        exit 1
+    fi
+    umount_jfs $MNT_FORK "sqlite3://$COPY_DB"
+
+    FORK_UUID=$(./juicefs status $FORK_META_URL 2>&1 | grep -oP '"UUID":\s*"[^"]+"' | grep -oP '[0-9a-f-]{36}' | head -1)
+    ./juicefs destroy --yes "$FORK_META_URL" "$FORK_UUID"
+    ./juicefs fork release $META_URL --fork-name deferred-wal
+
+    rm -f "$DUMP_PATH" "$MANIFEST_PATH" "$COPY_DB" "${COPY_DB}-wal" "${COPY_DB}-shm"
+    flush_fork_sqlite_dbs
+}
+
+# =============================================================================
 # test_fork_dump_load_independent_volume
 #
 # juicefs dump + juicefs load produces a new independent volume with fresh

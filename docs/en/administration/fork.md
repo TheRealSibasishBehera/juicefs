@@ -72,6 +72,58 @@ juicefs fork create <SRC-META-URL> <DST-META-URL> [flags]
 4. Writes a **lease object** into the shared bucket at `<bucket>/<volumeName>/_forks/<forkUUID>/lease`. This lease prevents the source's GC from reclaiming pre-fork objects.
 5. Sets a `forkProtectBelow` counter in both the source and fork metadata databases so their GC daemons protect pre-fork chunk IDs even without reading the bucket.
 
+### `juicefs fork dump`
+
+Reserves a fork lease first, then writes a metadata dump and a sidecar manifest.
+
+```shell
+juicefs fork dump <SRC-META-URL> --path <DUMP-FILE> [flags]
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--path` | (required) | Dump file path. The manifest is written to `<path>.fork.json`. |
+| `--name` | `<src>-fork-<uuid8>` | Human-readable fork name stored in the lease and manifest. |
+| `--threads` | `10` | Threads used for metadata dump. |
+| `--binary` | `false` | Dump metadata in binary format instead of JSON. |
+| `--keep-secret-key` | `true` | Keep object-storage secrets in the dump. |
+
+**What it does:**
+
+1. Reads source `nextChunk` / `nextInode` and computes `forkIndex`.
+2. Writes the lease immediately at `<bucket>/<volumeName>/_forks/<forkUUID>/lease`, so GC protection starts before dump completes.
+3. Persists source protection counters (`forkProtectBelow`, and `forkProtectRearm` when needed).
+4. Writes metadata dump to `--path` and sidecar manifest to `<path>.fork.json`.
+
+If dump fails after the lease is written, JuiceFS attempts to roll back the lease and set `forkProtectCleared=1` when no active leases remain.
+
+### `juicefs fork load`
+
+Consumes a deferred fork dump + manifest and creates the destination fork DB.
+
+```shell
+juicefs fork load <DST-META-URL> --path <DUMP-FILE> [flags]
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--path` | (required) | Dump file path. Manifest is read from `<path>.fork.json`. |
+| `--threads` | `10` | Threads used when loading binary dump format. |
+
+**What it does:**
+
+1. Reads `<path>.fork.json` and validates format/version.
+2. Verifies destination metadata is empty.
+3. Loads the dump into destination (`LoadMeta` for JSON, `LoadMetaV2` for binary).
+4. Patches destination UUID and diverged counters:
+   - `nextChunk = forkBaseChunk + forkIndex * 2^40`
+   - `nextInode = forkBaseInode + forkIndex * 2^40`
+5. Marks shared storage (`forkSharedStorage=1`) and writes `forkProtectBelow` in destination DB.
+
 ### `juicefs fork list`
 
 Lists all active fork leases of a volume.
@@ -217,6 +269,15 @@ This produces a new independently mountable volume — but with two critical dif
 
 dump/load is the right tool for **disaster recovery** (restoring a backed-up metadata snapshot to a fresh cluster) or for **migrating between metadata engine types** (e.g. Redis → TiKV). It is not designed for creating live branches.
 
+If you need a deferred workflow with the same GC safety as `fork create`, use:
+
+```shell
+juicefs fork dump <SRC-META-URL> --path <dump>
+juicefs fork load <DST-META-URL> --path <dump>
+```
+
+This keeps the lease protection model while allowing the fork DB to be created later.
+
 ### `juicefs fork` — the only safe multi-volume branch
 
 Fork is the only operation that produces a **separate mountable volume with a safe shared-object relationship**:
@@ -237,5 +298,5 @@ The safety comes from the **lease object** written to the shared bucket at fork 
 - **Same object storage bucket.** The fork must use the same bucket and prefix as the source. The separation is in the metadata only.
 - **Fork name must be unique** among the active forks of a source volume. Duplicate names are rejected at creation time.
 - **Concurrent fork creation** from the same source at the exact same moment may produce the same fork index. Avoid running `juicefs fork` twice simultaneously against the same source.
-- **`dump`/`load` of a fork** produces a standalone volume that loses the `forkSharedStorage` sentinel. If you load a fork's metadata dump elsewhere, treat it as a new independent volume and manage its object storage separately.
+- **Plain `dump`/`load`** (not `fork dump`/`fork load`) produces a standalone volume without fork leases and `forkSharedStorage` sentinel. Treat it as a new independent volume and manage object storage separately.
 - **No automatic sync.** A fork is a point-in-time snapshot; changes on the source after the fork point are not propagated to the fork, and vice versa.

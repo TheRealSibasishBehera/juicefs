@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -39,6 +40,12 @@ const forkLeasePrefix = "_forks/"
 // ID space.  1<<40 ≈ 1.1 trillion — unreachable by organic growth.
 const forkCounterOffset = int64(1) << 40
 
+const (
+	forkManifestVersion = 1
+	forkDumpFormatJSON  = "json"
+	forkDumpFormatBin   = "binary"
+)
+
 // ForkLease is the JSON document stored as the lease object in the bucket.
 type ForkLease struct {
 	ForkUUID      string `json:"forkUUID"`
@@ -49,6 +56,22 @@ type ForkLease struct {
 	ForkBaseInode int64  `json:"forkBaseInode"`
 	ForkIndex     int64  `json:"forkIndex"`
 	CreatedAt     string `json:"createdAt"`
+}
+
+// ForkManifest is written as a sidecar JSON at <dump-path>.fork.json.
+type ForkManifest struct {
+	Version           int    `json:"version"`
+	DumpPath          string `json:"dumpPath"`
+	DumpFormat        string `json:"dumpFormat"`
+	CreatedAt         string `json:"createdAt"`
+	SourceName        string `json:"sourceName"`
+	SourceUUID        string `json:"sourceUUID"`
+	ForkUUID          string `json:"forkUUID"`
+	ForkName          string `json:"forkName"`
+	ForkBaseChunk     int64  `json:"forkBaseChunk"`
+	ForkBaseInode     int64  `json:"forkBaseInode"`
+	ForkIndex         int64  `json:"forkIndex"`
+	ForkCounterOffset int64  `json:"forkCounterOffset"`
 }
 
 func cmdFork() *cli.Command {
@@ -95,6 +118,53 @@ Examples:
 				},
 			},
 			{
+				Name:      "dump",
+				Action:    forkDump,
+				Usage:     "Reserve a fork lease and dump source metadata for deferred fork creation",
+				ArgsUsage: "SRC-META-URL",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "path",
+						Usage: "path of the metadata dump file",
+					},
+					&cli.StringFlag{
+						Name:  "name",
+						Usage: "name for the forked volume (default: <srcName>-fork-<shortUUID>)",
+					},
+					&cli.IntFlag{
+						Name:  "threads",
+						Value: 10,
+						Usage: "number of threads for the metadata dump/load",
+					},
+					&cli.BoolFlag{
+						Name:  "binary",
+						Usage: "dump metadata into a binary file (different from original JSON format)",
+					},
+					&cli.BoolFlag{
+						Name:  "keep-secret-key",
+						Value: true,
+						Usage: "keep secret keys intact in the dump file",
+					},
+				},
+			},
+			{
+				Name:      "load",
+				Action:    forkLoad,
+				Usage:     "Load a deferred fork dump into destination metadata",
+				ArgsUsage: "DST-META-URL",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "path",
+						Usage: "path of the metadata dump file",
+					},
+					&cli.IntFlag{
+						Name:  "threads",
+						Value: 10,
+						Usage: "number of threads to load binary metadata",
+					},
+				},
+			},
+			{
 				Name:      "list",
 				Action:    forkList,
 				Usage:     "List active forks of a volume",
@@ -125,6 +195,19 @@ Examples:
 			&cli.StringFlag{
 				Name:  "fork-name",
 				Usage: "name of the fork whose lease should be released (for 'release' subcommand)",
+			},
+			&cli.StringFlag{
+				Name:  "path",
+				Usage: "path of the metadata dump file (for 'dump'/'load' subcommands)",
+			},
+			&cli.BoolFlag{
+				Name:  "binary",
+				Usage: "dump metadata into a binary file (for 'dump' subcommand)",
+			},
+			&cli.BoolFlag{
+				Name:  "keep-secret-key",
+				Value: true,
+				Usage: "keep secret keys intact in dump file (for 'dump' subcommand)",
 			},
 		},
 	}
@@ -187,7 +270,7 @@ func forkCreate(ctx *cli.Context) error {
 
 	// 5. Build fork identifiers
 	forkUUID := uuid.New().String()
-	forkName := ctx.String("name")
+	forkName := forkStringFlag(ctx, "name")
 	if forkName == "" {
 		forkName = srcFormat.Name + "-fork-" + forkUUID[:8]
 	}
@@ -207,7 +290,7 @@ func forkCreate(ctx *cli.Context) error {
 
 	dumpErr := make(chan error, 1)
 	go func() {
-		err := srcMeta.DumpMeta(pw, 1, ctx.Int("threads"), false, false, false)
+		err := srcMeta.DumpMeta(pw, 1, forkIntFlag(ctx, "threads"), false, false, false)
 		_ = pw.CloseWithError(err)
 		dumpErr <- err
 	}()
@@ -270,56 +353,9 @@ func forkCreate(ctx *cli.Context) error {
 		return fmt.Errorf("write fork lease: %w", err)
 	}
 
-	// 9. Persist the fork protection threshold in BOTH the source and fork DBs.
-	//
-	// Equal-privilege design: both source and fork share pre-fork chunks from
-	// the same bucket namespace. Either side can delete files (including pre-fork
-	// ones), so both must protect the shared chunk IDs from deletion.
-	//
-	// Source DB: any live source mount or GC reads this at startup.
-	// SetCounter only advances. We always try to advance to forkBaseChunk so
-	// that the source's GC knows to protect all chunks up to this fork point.
-	// For a first fork: 0 → forkBaseChunk.
-	// For a fork-of-fork: the source is fork-a whose existing threshold may be
-	// lower (set when fork-a was itself created). We must raise it to forkBaseChunk
-	// so fork-a's GC protects its own post-fork-a chunks that this new child needs.
-	existing, existErr := srcMeta.GetCounter("forkProtectBelow")
-	logger.Infof("forkProtectBelow in source DB: %d (err: %v)", existing, existErr)
-	if existErr == nil && existing < forkBaseChunk {
-		if setErr := srcMeta.SetCounter("forkProtectBelow", forkBaseChunk); setErr != nil {
-			logger.Warnf("persist forkProtectBelow in source: %v (non-fatal, GC will fall back to bucket)", setErr)
-		} else {
-			logger.Infof("Persisted forkProtectBelow=%d in source metadata DB", forkBaseChunk)
-		}
-	}
-	// If a previous round of forks was fully released, forkProtectCleared was
-	// set to 1 to signal GC that protection was disabled.  A new fork being
-	// created must re-arm protection, so we must reset that sentinel.
-	// We can't decrement a counter, so we use a separate "rearm" counter:
-	// forkProtectRearm tracks how many new-fork cycles have started since the
-	// last cleared signal.  GC treats protection as active if
-	// rearmCount > clearedCount (i.e., a new fork was created after last clear).
-	clearedVal, _ := srcMeta.GetCounter("forkProtectCleared")
-	if clearedVal > 0 {
-		// Advance rearm counter to be strictly greater than cleared counter,
-		// signalling GC that a new fork exists and protection is active again.
-		rearmVal, _ := srcMeta.GetCounter("forkProtectRearm")
-		if rearmVal <= clearedVal {
-			if setErr := srcMeta.SetCounter("forkProtectRearm", clearedVal+1); setErr != nil {
-				logger.Warnf("reset fork protection rearm counter: %v (non-fatal)", setErr)
-			} else {
-				logger.Infof("Re-armed fork protection in source DB (cleared=%d, rearm=%d)", clearedVal, clearedVal+1)
-			}
-		}
-	}
-	// Fork DB: without its own threshold the fork's deleteSlice_ would have no
-	// protection against deleting shared pre-fork chunks, corrupting the source
-	// and any sibling forks. This gives the fork symmetric GC safety.
-	if setErr := dstMeta.SetCounter("forkProtectBelow", forkBaseChunk); setErr != nil {
-		logger.Warnf("persist forkProtectBelow in fork: %v (non-fatal)", setErr)
-	} else {
-		logger.Infof("Persisted forkProtectBelow=%d in fork metadata DB", forkBaseChunk)
-	}
+	// 9. Persist the fork protection threshold in BOTH source and fork DBs.
+	persistSourceForkProtection(srcMeta, forkBaseChunk)
+	persistForkProtection(dstMeta, forkBaseChunk)
 
 	// dstMeta.Shutdown() is called via defer above, which flushes the SQLite
 	// WAL before the process exits, making the .db file self-contained.
@@ -331,6 +367,351 @@ func forkCreate(ctx *cli.Context) error {
 	logger.Infof("  BaseInode:  %d  →  fork starts at %d", forkBaseInode, newNextInode)
 	logger.Infof("Mount the fork with: juicefs mount %s <mountpoint>", utils.RemovePassword(dstURI))
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// fork dump
+// ---------------------------------------------------------------------------
+
+func forkDump(ctx *cli.Context) (err error) {
+	setup0(ctx, 1, 1)
+	srcURI := ctx.Args().Get(0)
+	removePassword(srcURI)
+
+	dumpPath := forkStringFlag(ctx, "path")
+	if dumpPath == "" {
+		return fmt.Errorf("--path is required for 'fork dump'")
+	}
+	threads := normalizeForkThreads(forkIntFlag(ctx, "threads"))
+	isBinary := forkBoolFlag(ctx, "binary")
+
+	srcMeta := meta.NewClient(srcURI, meta.DefaultConf())
+	defer srcMeta.Shutdown() //nolint:errcheck
+	srcFormat, err := srcMeta.Load(true)
+	if err != nil {
+		return fmt.Errorf("load source format: %w", err)
+	}
+
+	forkBaseChunk, err := srcMeta.GetCounter("nextChunk")
+	if err != nil {
+		return fmt.Errorf("read nextChunk from source: %w", err)
+	}
+	forkBaseInode, err := srcMeta.GetCounter("nextInode")
+	if err != nil {
+		return fmt.Errorf("read nextInode from source: %w", err)
+	}
+
+	blob, err := createStorage(*srcFormat)
+	if err != nil {
+		return fmt.Errorf("connect to object storage: %w", err)
+	}
+	existingLeases, err := listForkLeases(ctx.Context, blob, srcFormat.Name)
+	if err != nil {
+		return fmt.Errorf("list existing fork leases: %w", err)
+	}
+	forkIndex := int64(len(existingLeases)) + 1 // 1-based
+
+	forkUUID := uuid.New().String()
+	forkName := forkStringFlag(ctx, "name")
+	if forkName == "" {
+		forkName = srcFormat.Name + "-fork-" + forkUUID[:8]
+	}
+	for _, l := range existingLeases {
+		if l.ForkName == forkName {
+			return fmt.Errorf("a fork named %q already exists under volume %s (UUID %s); choose a different --name",
+				forkName, srcFormat.Name, l.ForkUUID)
+		}
+	}
+
+	lease := ForkLease{
+		ForkUUID:      forkUUID,
+		ForkName:      forkName,
+		SourceName:    srcFormat.Name,
+		SourceUUID:    srcFormat.UUID,
+		ForkBaseChunk: forkBaseChunk,
+		ForkBaseInode: forkBaseInode,
+		ForkIndex:     forkIndex,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := writeForkLease(ctx.Context, blob, srcFormat.Name, forkUUID, lease); err != nil {
+		return fmt.Errorf("write fork lease: %w", err)
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		rollbackErr := rollbackForkLeaseAfterDumpFailure(ctx.Context, srcMeta, blob, srcFormat.Name, forkUUID)
+		if rollbackErr != nil {
+			logger.Warnf("rollback lease after failed fork dump: %v", rollbackErr)
+		}
+	}()
+
+	persistSourceForkProtection(srcMeta, forkBaseChunk)
+
+	if err := dumpMeta(srcMeta, dumpPath, threads, forkBoolFlag(ctx, "keep-secret-key"), false, false, isBinary); err != nil {
+		return fmt.Errorf("dump metadata to %s: %w", dumpPath, err)
+	}
+
+	manifest := ForkManifest{
+		Version:           forkManifestVersion,
+		DumpPath:          dumpPath,
+		DumpFormat:        forkDumpFormatJSON,
+		CreatedAt:         time.Now().UTC().Format(time.RFC3339),
+		SourceName:        srcFormat.Name,
+		SourceUUID:        srcFormat.UUID,
+		ForkUUID:          forkUUID,
+		ForkName:          forkName,
+		ForkBaseChunk:     forkBaseChunk,
+		ForkBaseInode:     forkBaseInode,
+		ForkIndex:         forkIndex,
+		ForkCounterOffset: forkCounterOffset,
+	}
+	if isBinary {
+		manifest.DumpFormat = forkDumpFormatBin
+	}
+	manifestPath := forkManifestPath(dumpPath)
+	if err := writeForkManifest(manifestPath, manifest); err != nil {
+		return fmt.Errorf("write fork manifest %s: %w", manifestPath, err)
+	}
+
+	logger.Infof("Fork dump created successfully:")
+	logger.Infof("  Source:      %s (%s)", srcFormat.Name, srcFormat.UUID)
+	logger.Infof("  Fork:        %s (%s)", forkName, forkUUID)
+	logger.Infof("  Dump:        %s (%s)", dumpPath, manifest.DumpFormat)
+	logger.Infof("  Manifest:    %s", manifestPath)
+	logger.Infof("Run: juicefs fork load <DST-META-URL> --path %s", dumpPath)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// fork load
+// ---------------------------------------------------------------------------
+
+func forkLoad(ctx *cli.Context) (err error) {
+	setup0(ctx, 1, 1)
+	dstURI := ctx.Args().Get(0)
+	removePassword(dstURI)
+
+	dumpPath := forkStringFlag(ctx, "path")
+	if dumpPath == "" {
+		return fmt.Errorf("--path is required for 'fork load'")
+	}
+	manifestPath := forkManifestPath(dumpPath)
+	threads := normalizeForkThreads(forkIntFlag(ctx, "threads"))
+
+	manifest, err := readForkManifest(manifestPath)
+	if err != nil {
+		return fmt.Errorf("read fork manifest %s: %w", manifestPath, err)
+	}
+	if manifest.DumpPath != "" && manifest.DumpPath != dumpPath {
+		logger.Warnf("manifest dumpPath=%q differs from --path=%q", manifest.DumpPath, dumpPath)
+	}
+
+	dstMeta := meta.NewClient(dstURI, meta.DefaultConf())
+	closed := false
+	defer func() {
+		if !closed {
+			_ = dstMeta.Shutdown()
+		}
+	}()
+
+	if existingFmt, err := dstMeta.Load(false); err == nil {
+		return fmt.Errorf("destination %s is already used by volume %s — use an empty metadata store",
+			utils.RemovePassword(dstURI), existingFmt.Name)
+	}
+
+	r, err := open(dumpPath, "", "")
+	if err != nil {
+		return fmt.Errorf("open dump file %s: %w", dumpPath, err)
+	}
+	defer r.Close() //nolint:errcheck
+
+	switch manifest.DumpFormat {
+	case forkDumpFormatBin:
+		opt := &meta.LoadOption{Threads: threads}
+		if err := dstMeta.LoadMetaV2(meta.WrapContext(ctx.Context), r, opt); err != nil {
+			return fmt.Errorf("load binary dump: %w", err)
+		}
+	case forkDumpFormatJSON:
+		if err := dstMeta.LoadMeta(r); err != nil {
+			return fmt.Errorf("load json dump: %w", err)
+		}
+	default:
+		return fmt.Errorf("unsupported dump format %q in manifest", manifest.DumpFormat)
+	}
+
+	dstFormat, err := dstMeta.Load(false)
+	if err != nil {
+		return fmt.Errorf("read destination format after load: %w", err)
+	}
+	dstFormat.UUID = manifest.ForkUUID
+	if err := dstMeta.Init(dstFormat, true /* force overwrite */); err != nil {
+		return fmt.Errorf("patch destination format: %w", err)
+	}
+
+	offset := manifest.ForkCounterOffset
+	if offset <= 0 {
+		offset = forkCounterOffset
+	}
+	newNextChunk := manifest.ForkBaseChunk + manifest.ForkIndex*offset
+	newNextInode := manifest.ForkBaseInode + manifest.ForkIndex*offset
+	if err := dstMeta.SetCounter("nextChunk", newNextChunk); err != nil {
+		return fmt.Errorf("patch nextChunk: %w", err)
+	}
+	if err := dstMeta.SetCounter("nextInode", newNextInode); err != nil {
+		return fmt.Errorf("patch nextInode: %w", err)
+	}
+	if err := dstMeta.SetCounter("forkSharedStorage", 1); err != nil {
+		logger.Warnf("mark fork as shared-storage: %v (non-fatal)", err)
+	}
+	persistForkProtection(dstMeta, manifest.ForkBaseChunk)
+
+	if err := dstMeta.Shutdown(); err != nil {
+		return fmt.Errorf("shutdown destination metadata: %w", err)
+	}
+	closed = true
+
+	logger.Infof("Fork loaded successfully:")
+	logger.Infof("  Source:      %s (%s)", manifest.SourceName, manifest.SourceUUID)
+	logger.Infof("  Fork:        %s (%s)", manifest.ForkName, manifest.ForkUUID)
+	logger.Infof("  BaseChunk:   %d  →  fork starts at %d", manifest.ForkBaseChunk, newNextChunk)
+	logger.Infof("  BaseInode:   %d  →  fork starts at %d", manifest.ForkBaseInode, newNextInode)
+	logger.Infof("Mount the fork with: juicefs mount %s <mountpoint>", utils.RemovePassword(dstURI))
+	return nil
+}
+
+func normalizeForkThreads(threads int) int {
+	if threads <= 0 {
+		logger.Warnf("Invalid threads number %d, reset to 1", threads)
+		return 1
+	}
+	return threads
+}
+
+func forkStringFlag(ctx *cli.Context, name string) string {
+	for _, c := range ctx.Lineage() {
+		if c != nil && c.IsSet(name) {
+			return c.String(name)
+		}
+	}
+	return ctx.String(name)
+}
+
+func forkIntFlag(ctx *cli.Context, name string) int {
+	for _, c := range ctx.Lineage() {
+		if c != nil && c.IsSet(name) {
+			return c.Int(name)
+		}
+	}
+	return ctx.Int(name)
+}
+
+func forkBoolFlag(ctx *cli.Context, name string) bool {
+	for _, c := range ctx.Lineage() {
+		if c != nil && c.IsSet(name) {
+			return c.Bool(name)
+		}
+	}
+	return ctx.Bool(name)
+}
+
+func persistSourceForkProtection(srcMeta meta.Meta, forkBaseChunk int64) {
+	existing, existErr := srcMeta.GetCounter("forkProtectBelow")
+	logger.Infof("forkProtectBelow in source DB: %d (err: %v)", existing, existErr)
+	if existErr == nil && existing < forkBaseChunk {
+		if setErr := srcMeta.SetCounter("forkProtectBelow", forkBaseChunk); setErr != nil {
+			logger.Warnf("persist forkProtectBelow in source: %v (non-fatal, GC will fall back to bucket)", setErr)
+		} else {
+			logger.Infof("Persisted forkProtectBelow=%d in source metadata DB", forkBaseChunk)
+		}
+	}
+
+	// If all previous forks were released, re-arm protection for this new fork.
+	clearedVal, _ := srcMeta.GetCounter("forkProtectCleared")
+	if clearedVal > 0 {
+		rearmVal, _ := srcMeta.GetCounter("forkProtectRearm")
+		if rearmVal <= clearedVal {
+			if setErr := srcMeta.SetCounter("forkProtectRearm", clearedVal+1); setErr != nil {
+				logger.Warnf("reset fork protection rearm counter: %v (non-fatal)", setErr)
+			} else {
+				logger.Infof("Re-armed fork protection in source DB (cleared=%d, rearm=%d)", clearedVal, clearedVal+1)
+			}
+		}
+	}
+}
+
+func persistForkProtection(forkMeta meta.Meta, forkBaseChunk int64) {
+	if setErr := forkMeta.SetCounter("forkProtectBelow", forkBaseChunk); setErr != nil {
+		logger.Warnf("persist forkProtectBelow in fork: %v (non-fatal)", setErr)
+	} else {
+		logger.Infof("Persisted forkProtectBelow=%d in fork metadata DB", forkBaseChunk)
+	}
+}
+
+func rollbackForkLeaseAfterDumpFailure(ctx context.Context, srcMeta meta.Meta, blob object.ObjectStorage, sourceName, forkUUID string) error {
+	leaseKey := forkLeaseKey(sourceName, forkUUID)
+	if err := blob.Delete(ctx, leaseKey); err != nil {
+		return fmt.Errorf("delete lease object %s: %w", leaseKey, err)
+	}
+	logger.Infof("Rolled back lease %s after failed fork dump", leaseKey)
+
+	remaining, err := listForkLeases(ctx, blob, sourceName)
+	if err != nil {
+		return fmt.Errorf("re-list fork leases after rollback: %w", err)
+	}
+	if len(remaining) == 0 {
+		// No active leases remain. Mark protection as cleared.
+		if setErr := srcMeta.SetCounter("forkProtectCleared", 1); setErr != nil {
+			logger.Warnf("set forkProtectCleared after rollback: %v", setErr)
+		}
+	}
+	return nil
+}
+
+func forkManifestPath(dumpPath string) string {
+	return dumpPath + ".fork.json"
+}
+
+func writeForkManifest(path string, manifest ForkManifest) error {
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func readForkManifest(path string) (ForkManifest, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ForkManifest{}, err
+	}
+	var manifest ForkManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return ForkManifest{}, err
+	}
+	if manifest.Version != forkManifestVersion {
+		return ForkManifest{}, fmt.Errorf("unsupported manifest version %d", manifest.Version)
+	}
+	if manifest.DumpFormat != forkDumpFormatJSON && manifest.DumpFormat != forkDumpFormatBin {
+		return ForkManifest{}, fmt.Errorf("unsupported dump format %q", manifest.DumpFormat)
+	}
+	if manifest.ForkUUID == "" || manifest.ForkName == "" || manifest.SourceName == "" || manifest.SourceUUID == "" {
+		return ForkManifest{}, fmt.Errorf("manifest missing required fork/source identifiers")
+	}
+	if manifest.ForkIndex <= 0 {
+		return ForkManifest{}, fmt.Errorf("invalid forkIndex %d in manifest", manifest.ForkIndex)
+	}
+	return manifest, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +774,7 @@ func forkRelease(ctx *cli.Context) error {
 		return fmt.Errorf("connect to object storage: %w", err)
 	}
 
-	forkName := ctx.String("fork-name")
+	forkName := forkStringFlag(ctx, "fork-name")
 	if forkName == "" {
 		return fmt.Errorf("--fork-name is required for 'fork release'")
 	}
