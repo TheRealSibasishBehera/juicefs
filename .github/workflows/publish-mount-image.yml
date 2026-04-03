@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/publish-mount-image.yml"
       - ".github/scripts/chaos/juicefs.Dockerfile"
+      - ".github/scripts/chaos/juicefs.multiarch.Dockerfile"
       - ".github/actions/build/action.yml"
       - "Makefile"
       - "**.go"
@@ -41,7 +42,10 @@ jobs:
         shell: bash
         run: |
           owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          version=$(./juicefs version | awk '{print $3}' | cut -d '-' -f1)
+          major=$(sed -n 's/.*major:[[:space:]]*\([0-9]\+\),.*/\1/p' pkg/version/version.go | head -1)
+          minor=$(sed -n 's/.*minor:[[:space:]]*\([0-9]\+\),.*/\1/p' pkg/version/version.go | head -1)
+          patch=$(sed -n 's/.*patch:[[:space:]]*\([0-9]\+\),.*/\1/p' pkg/version/version.go | head -1)
+          version="${major}.${minor}.${patch}"
           if [[ -n "${{ github.event.inputs.tag }}" ]]; then
             tag="${{ github.event.inputs.tag }}"
           else
