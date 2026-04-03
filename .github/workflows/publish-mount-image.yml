@@ -37,13 +37,14 @@ jobs:
         id: meta
         shell: bash
         run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           version=$(./juicefs version | awk '{print $3}' | cut -d '-' -f1)
           if [[ -n "${{ github.event.inputs.tag }}" ]]; then
             tag="${{ github.event.inputs.tag }}"
           else
             tag="ce-v${version}"
           fi
-          image="ghcr.io/${{ github.repository_owner }}/juicefs-mount:${tag}"
+          image="ghcr.io/${owner}/juicefs-mount:${tag}"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "image=${image}" >> "$GITHUB_OUTPUT"
           echo "Publishing ${image}"
