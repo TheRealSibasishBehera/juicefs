@@ -22,6 +22,11 @@ if [[ `uname  -a` =~ "Darwin" ]];then
 fi
 echo "os=$os"
 
+python_bin="python3"
+if ! command -v "${python_bin}" >/dev/null 2>&1; then
+    python_bin="python"
+fi
+
 set -x
 
 MINT_DATA_DIR=testdata
@@ -124,18 +129,18 @@ function get_duration() {
 }
 
 function log_success() {
-    function=$(python -c 'import sys,json; print(json.dumps(sys.stdin.read()))' <<<"$2")
+    function=$(${python_bin} -c 'import sys,json; print(json.dumps(sys.stdin.read()))' <<<"$2")
     printf '{"name": "awscli", "duration": %d, "function": %s, "status": "PASS"}\n' "$1" "$function"
 }
 
 function log_failure() {
-    function=$(python -c 'import sys,json; print(json.dumps(sys.stdin.read()))' <<<"$2")
+    function=$(${python_bin} -c 'import sys,json; print(json.dumps(sys.stdin.read()))' <<<"$2")
     err=$(echo "$3" | tr -d '\n')
     printf '{"name": "awscli", "duration": %d, "function": %s, "status": "FAIL", "error": "%s"}\n' "$1" "$function" "$err"
 }
 
 function log_alert() {
-    function=$(python -c 'import sys,json; print(json.dumps(sys.stdin.read()))' <<<"$2")
+    function=$(${python_bin} -c 'import sys,json; print(json.dumps(sys.stdin.read()))' <<<"$2")
     err=$(echo "$4" | tr -d '\n')
     printf '{"name": "awscli", "duration": %d, "function": %s, "status": "FAIL", "alert": "%s", "error": "%s"}\n' "$1" "$function" "$3" "$err"
 }
@@ -510,8 +515,8 @@ function test_list_objects() {
           test_function=${function}
           out=$($function)
           rv=$?
-          output=$(echo "$out")
-          if [ $rv -eq 0 ] && [ "$output" != "" ]; then
+          content_count=$(echo "$out" | jq -r '(.Contents // []) | length')
+          if [ $rv -eq 0 ] && [ "$content_count" != "0" ]; then
               rv=1
               # since rv is 0, command passed, but didn't return expected value. In this case set the output
               out="list-objects with prefix is dir failed"

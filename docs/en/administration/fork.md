@@ -97,7 +97,7 @@ juicefs fork dump <SRC-META-URL> --path <DUMP-FILE> [flags]
 3. Persists source protection counters (`forkProtectBelow`, and `forkProtectRearm` when needed).
 4. Writes metadata dump to `--path` and sidecar manifest to `<path>.fork.json`.
 
-If dump fails after the lease is written, JuiceFS attempts to roll back the lease and set `forkProtectCleared=1` when no active leases remain.
+If dump fails after the lease is written, JuiceFS attempts to roll back the lease and, when no active leases remain, advances `forkProtectCleared` to a value greater than `forkProtectRearm`.
 
 ### `juicefs fork load`
 

@@ -177,6 +177,9 @@ func testFileSystem(t *testing.T, s ObjectStorage) {
 					expectedKeys = []string{"x/", "x/x.txt", "xy.txt", "xyz/", "xyz/xyz.txt"}
 				}
 			}
+			if os.Geteuid() == 0 {
+				expectedKeys = []string{"x/", "x/x.txt", "xy.txt", "xyz/", "xyz/xyz.txt"}
+			}
 			if err = testKeysEqual(objs, expectedKeys); err != nil {
 				t.Fatalf("testKeysEqual fail: %s mode %o", err, mode)
 			}

@@ -5,6 +5,7 @@ all: juicefs
 REVISION := $(shell git rev-parse --short HEAD 2>/dev/null)
 REVISIONDATE := $(shell git log -1 --pretty=format:'%cd' --date short 2>/dev/null)
 PKG := github.com/juicedata/juicefs/pkg/version
+COVERDIR := $(shell mkdir -p cover && realpath cover)
 GCFLAGS =
 BUILD ?= release
 ifneq ($(strip $(REVISION)),) # Use git clone
@@ -109,20 +110,20 @@ debug:
 	$(MAKE) BUILD=debug all
 
 test.meta.core:
-	SKIP_NON_CORE=true go test -v -cover -count=1  -failfast -timeout=12m ./pkg/meta/... -args -test.gocoverdir="$(shell realpath cover/)"
+	SKIP_NON_CORE=true go test -v -cover -count=1  -failfast -timeout=12m ./pkg/meta/... -args -test.gocoverdir="$(COVERDIR)"
 
 test.meta.non-core:
-	go test -v -cover -run='TestRedisCluster|TestPostgreSQLClient|TestLoadDumpSlow|TestEtcdClient|TestKeyDB' -count=1  -failfast -timeout=12m ./pkg/meta/... -args -test.gocoverdir="$(shell realpath cover/)"
+	go test -v -cover -run='TestRedisCluster|TestPostgreSQLClient|TestLoadDumpSlow|TestEtcdClient|TestKeyDB' -count=1  -failfast -timeout=12m ./pkg/meta/... -args -test.gocoverdir="$(COVERDIR)"
 
 test.pkg:
-	go test -tags gluster -v -cover -count=1  -failfast -timeout=12m $$(go list ./pkg/... | grep -v /meta) -args -test.gocoverdir="$(shell realpath cover/)"
+	go test -tags gluster -v -cover -count=1  -failfast -timeout=12m $$(go list ./pkg/... | grep -v /meta) -args -test.gocoverdir="$(COVERDIR)"
 
 test.cmd:
-	sudo JFS_GC_SKIPPEDTIME=1 MINIO_ACCESS_KEY=testUser MINIO_SECRET_KEY=testUserPassword GOMAXPROCS=8 go test -v -count=1 -failfast -cover -timeout=8m ./cmd/... -coverpkg=./pkg/...,./cmd/... -args -test.gocoverdir="$(shell realpath cover/)"
+	sudo JFS_GC_SKIPPEDTIME=1 MINIO_ACCESS_KEY=testUser MINIO_SECRET_KEY=testUserPassword MINIO_ROOT_USER=testUser MINIO_ROOT_PASSWORD=testUserPassword GOMAXPROCS=8 go test -v -count=1 -failfast -cover -timeout=8m ./cmd/... -coverpkg=./pkg/...,./cmd/... -args -test.gocoverdir="$(COVERDIR)"
 
 test.fdb:
-	go test -v -cover -count=1  -failfast -timeout=4m ./pkg/meta/ -tags fdb -run=TestFdb -args -test.gocoverdir="$(shell realpath cover/)"
+	go test -v -cover -count=1  -failfast -timeout=4m ./pkg/meta/ -tags fdb -run=TestFdb -args -test.gocoverdir="$(COVERDIR)"
 
 unit-random-test:
 	echo "Using meta:$(meta), seed: $(seed), checks:${checks}, steps: $(steps)"
-	go test ./pkg/meta/... -rapid.meta=$(meta) -rapid.seed=$(seed) -rapid.checks=$(checks) -rapid.steps=$(steps) -run "TestFSOps" -v -failfast -count=1 -timeout=60m -cover -coverpkg=./pkg/... -args -test.gocoverdir="$(shell realpath cover/)"
+	go test ./pkg/meta/... -rapid.meta=$(meta) -rapid.seed=$(seed) -rapid.checks=$(checks) -rapid.steps=$(steps) -run "TestFSOps" -v -failfast -count=1 -timeout=60m -cover -coverpkg=./pkg/... -args -test.gocoverdir="$(COVERDIR)"

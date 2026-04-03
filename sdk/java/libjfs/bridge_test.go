@@ -381,21 +381,65 @@ func TestPush(t *testing.T) {
 		t.Fatalf("error pushing: %v", err)
 	}
 
-	wants := []string{
-		"prefix.name.constname.constvalue.labelname.val1 1",
-		"prefix.name.constname.constvalue.labelname.val2 1",
+	wants := map[string]map[string]string{
+		"val1": {
+			"constname": "constvalue",
+			"labelname": "val1",
+			"a":         "b",
+		},
+		"val2": {
+			"constname": "constvalue",
+			"labelname": "val2",
+			"a":         "b",
+		},
 	}
 
 	select {
 	case got := <-nmg.readc:
-		for _, want := range wants {
-			matched, err := regexp.MatchString(want, got)
-			if err != nil {
-				t.Fatalf("error pushing: %v", err)
+		lines, err := stringToLines(got)
+		if err != nil {
+			t.Fatalf("error parsing graphite output: %v", err)
+		}
+		for _, line := range lines {
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				t.Fatalf("invalid graphite line (want at least 2 fields): %q", line)
 			}
-			if !matched {
-				t.Fatalf("missing metric:\nno match for %s received by server:\n%s", want, got)
+			nameAndTags := strings.Split(fields[0], ";")
+			if len(nameAndTags) == 0 || nameAndTags[0] != "prefix.name" {
+				t.Fatalf("unexpected metric name in line %q", line)
 			}
+			if fields[1] != "1" {
+				t.Fatalf("unexpected metric value in line %q", line)
+			}
+			tags := make(map[string]string, len(nameAndTags)-1)
+			for _, part := range nameAndTags[1:] {
+				kv := strings.SplitN(part, "=", 2)
+				if len(kv) != 2 {
+					t.Fatalf("invalid tag %q in line %q", part, line)
+				}
+				tags[kv[0]] = kv[1]
+			}
+			labelValue, ok := tags["labelname"]
+			if !ok {
+				t.Fatalf("missing labelname tag in line %q", line)
+			}
+			wantTags, ok := wants[labelValue]
+			if !ok {
+				t.Fatalf("unexpected labelname=%q in line %q", labelValue, line)
+			}
+			if len(tags) != len(wantTags) {
+				t.Fatalf("unexpected tag count for labelname=%q: got %v want %v", labelValue, tags, wantTags)
+			}
+			for k, v := range wantTags {
+				if tags[k] != v {
+					t.Fatalf("tag mismatch for labelname=%q: got %v want %v", labelValue, tags, wantTags)
+				}
+			}
+			delete(wants, labelValue)
+		}
+		if len(wants) != 0 {
+			t.Fatalf("missing metrics for labels: %v, got payload:\n%s", wants, got)
 		}
 		return
 	case err := <-nmg.errc:

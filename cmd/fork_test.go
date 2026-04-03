@@ -135,3 +135,54 @@ func TestForkManifestPathAndThreads(t *testing.T) {
 		t.Fatalf("normalizeForkThreads(8): expected 8, got %d", got)
 	}
 }
+
+func TestNextForkProtectCleared(t *testing.T) {
+	tests := []struct {
+		name    string
+		cleared int64
+		rearm   int64
+		want    int64
+	}{
+		{name: "both zero", cleared: 0, rearm: 0, want: 1},
+		{name: "rearm ahead", cleared: 1, rearm: 2, want: 3},
+		{name: "equal counters", cleared: 5, rearm: 5, want: 6},
+		{name: "cleared already ahead", cleared: 7, rearm: 3, want: 8},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nextForkProtectCleared(tc.cleared, tc.rearm); got != tc.want {
+				t.Fatalf("nextForkProtectCleared(%d,%d): want %d, got %d", tc.cleared, tc.rearm, tc.want, got)
+			}
+		})
+	}
+}
+
+func TestNextForkProtectRearm(t *testing.T) {
+	tests := []struct {
+		name       string
+		cleared    int64
+		rearm      int64
+		wantTarget int64
+		wantNeed   bool
+	}{
+		{name: "already rearmed", cleared: 5, rearm: 6, wantNeed: false},
+		{name: "equal counters", cleared: 5, rearm: 5, wantTarget: 6, wantNeed: true},
+		{name: "rearm behind", cleared: 8, rearm: 2, wantTarget: 9, wantNeed: true},
+		{name: "both zero", cleared: 0, rearm: 0, wantTarget: 1, wantNeed: true},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			gotTarget, gotNeed := nextForkProtectRearm(tc.cleared, tc.rearm)
+			if gotNeed != tc.wantNeed {
+				t.Fatalf("nextForkProtectRearm(%d,%d): want need=%v, got %v", tc.cleared, tc.rearm, tc.wantNeed, gotNeed)
+			}
+			if gotNeed && gotTarget != tc.wantTarget {
+				t.Fatalf("nextForkProtectRearm(%d,%d): want target=%d, got %d", tc.cleared, tc.rearm, tc.wantTarget, gotTarget)
+			}
+		})
+	}
+}

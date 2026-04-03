@@ -344,8 +344,8 @@ Both the source and the fork resolve object paths using the same `<volumeName>/c
 | Scenario | Effect | Recovery |
 |----------|--------|----------|
 | `fork create` crashes after lease write but before counter writes | Lease exists, DST may be partially loaded or unprotected | Delete the lease manually (`juicefs fork release`), repeat fork |
-| `fork dump` fails after lease write | Temporary protection may remain | Command tries to delete lease and, if no leases remain, sets `forkProtectCleared=1`; rerun `fork dump` |
-| `fork release` crashes after lease delete | Lease gone, `forkProtectCleared` may not be set | Manually set `forkProtectCleared = 1` in source DB via `juicefs config`, then GC |
+| `fork dump` fails after lease write | Temporary protection may remain | Command tries to delete lease and, if no leases remain, advances `forkProtectCleared` beyond `forkProtectRearm`; rerun `fork dump` |
+| `fork release` crashes after lease delete | Lease gone, `forkProtectCleared` may not be set | Manually set `forkProtectCleared` to a value greater than `forkProtectRearm` in source DB via `juicefs config`, then GC |
 | Source DB counter `forkProtectBelow` lost (DB reset) | GC falls back to bucket scan on next run — leases still protect objects | No action needed; GC reads leases from bucket |
 | Fork DB counter `forkProtectBelow` lost | Fork's `deleteSlice_` loses DB protection | GC on the fork still reads bucket leases and skips protected objects; live-mount deleteSlice_ has no DB fallback — re-set counter via `juicefs config` |
 | Orphan lease (fork DB wiped, lease not released) | Pre-fork objects are permanently protected on the source | Manually delete the lease object from the bucket at `<vol>/_forks/<uuid>/lease` |
