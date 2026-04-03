@@ -10,7 +10,7 @@ RUN go mod download
 COPY . .
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends musl-tools upx-ucl ca-certificates \
+    && apt-get install -y --no-install-recommends musl-tools ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 RUN STATIC=1 make juicefs
