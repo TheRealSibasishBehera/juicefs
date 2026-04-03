@@ -30,13 +30,11 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Build JuiceFS (static)
-        shell: bash
-        run: |
-          sudo .github/scripts/apt_install.sh musl-tools upx-ucl
-          export STATIC=1
-          make juicefs
-          ./juicefs version
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Resolve image metadata
         id: meta
@@ -65,7 +63,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: .github/scripts/chaos/juicefs.Dockerfile
+          file: .github/scripts/chaos/juicefs.multiarch.Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.image }}
 
