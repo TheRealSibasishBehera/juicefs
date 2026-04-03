@@ -29,7 +29,7 @@ func TestRotate(t *testing.T) {
 		return "dump-" + ts.UTC().Format("2006-01-02-150405") + ".json.gz"
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	objs := make([]string, 0, 25)
 	for cursor, i := now.AddDate(0, 0, -100), 0; i <= 200; i++ { // one backup for every half day
 		objs = append(objs, format(cursor))

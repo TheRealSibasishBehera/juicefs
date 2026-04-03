@@ -648,6 +648,88 @@ func persistForkProtection(forkMeta meta.Meta, forkBaseChunk int64) {
 	}
 }
 
+func nextForkProtectCleared(cleared, rearm int64) int64 {
+	target := cleared + 1
+	if rearm >= target {
+		target = rearm + 1
+	}
+	return target
+}
+
+func nextForkProtectRearm(cleared, rearm int64) (int64, bool) {
+	if rearm > cleared {
+		return 0, false
+	}
+	return cleared + 1, true
+}
+
+func ensureForkProtectionRearmed(srcMeta meta.Meta, reason string) {
+	for i := 0; i < 3; i++ {
+		clearedVal, err := srcMeta.GetCounter("forkProtectCleared")
+		if err != nil {
+			logger.Warnf("read forkProtectCleared %s: %v", reason, err)
+			return
+		}
+		rearmVal, err := srcMeta.GetCounter("forkProtectRearm")
+		if err != nil {
+			logger.Warnf("read forkProtectRearm %s: %v", reason, err)
+			return
+		}
+		target, need := nextForkProtectRearm(clearedVal, rearmVal)
+		if !need {
+			return
+		}
+		if setErr := srcMeta.SetCounter("forkProtectRearm", target); setErr != nil {
+			// Concurrent updates can race this monotonic set; retry.
+			if strings.Contains(setErr.Error(), "must be greater than current") {
+				continue
+			}
+			logger.Warnf("set forkProtectRearm=%d %s: %v", target, reason, setErr)
+			return
+		}
+		logger.Infof("Re-armed fork protection in source DB (cleared=%d, rearm=%d)", clearedVal, target)
+		return
+	}
+	logger.Warnf("failed to re-arm fork protection %s after retries", reason)
+}
+
+func markForkProtectionCleared(srcMeta meta.Meta, reason string) {
+	clearedVal, err := srcMeta.GetCounter("forkProtectCleared")
+	if err != nil {
+		logger.Warnf("read forkProtectCleared %s: %v", reason, err)
+		return
+	}
+	rearmVal, err := srcMeta.GetCounter("forkProtectRearm")
+	if err != nil {
+		logger.Warnf("read forkProtectRearm %s: %v", reason, err)
+		return
+	}
+
+	target := nextForkProtectCleared(clearedVal, rearmVal)
+	if setErr := srcMeta.SetCounter("forkProtectCleared", target); setErr != nil {
+		logger.Warnf("set forkProtectCleared=%d %s: %v", target, reason, setErr)
+		return
+	}
+	logger.Infof("Marked fork protection cleared in source DB (cleared=%d, rearm=%d, new=%d)",
+		clearedVal, rearmVal, target)
+}
+
+func markForkProtectionClearedWithLeaseRecheck(ctx context.Context, srcMeta meta.Meta, blob object.ObjectStorage, sourceName, reason string) {
+	markForkProtectionCleared(srcMeta, reason)
+
+	remaining, err := listForkLeases(ctx, blob, sourceName)
+	if err != nil {
+		// Be conservative on uncertainty: keep protection armed.
+		logger.Warnf("re-list fork leases %s: %v; conservatively re-arming protection", reason, err)
+		ensureForkProtectionRearmed(srcMeta, reason+" (lease recheck failed)")
+		return
+	}
+	if len(remaining) > 0 {
+		logger.Warnf("detected %d active lease(s) %s after clearing; re-arming protection", len(remaining), reason)
+		ensureForkProtectionRearmed(srcMeta, reason+" (active lease detected)")
+	}
+}
+
 func rollbackForkLeaseAfterDumpFailure(ctx context.Context, srcMeta meta.Meta, blob object.ObjectStorage, sourceName, forkUUID string) error {
 	leaseKey := forkLeaseKey(sourceName, forkUUID)
 	if err := blob.Delete(ctx, leaseKey); err != nil {
@@ -661,9 +743,7 @@ func rollbackForkLeaseAfterDumpFailure(ctx context.Context, srcMeta meta.Meta, b
 	}
 	if len(remaining) == 0 {
 		// No active leases remain. Mark protection as cleared.
-		if setErr := srcMeta.SetCounter("forkProtectCleared", 1); setErr != nil {
-			logger.Warnf("set forkProtectCleared after rollback: %v", setErr)
-		}
+		markForkProtectionClearedWithLeaseRecheck(ctx, srcMeta, blob, sourceName, "after rollback")
 	}
 	return nil
 }
@@ -809,9 +889,7 @@ func forkRelease(ctx *cli.Context) error {
 	} else if len(remaining) == 0 {
 		// No more active leases — set the "cleared" flag so any process
 		// reading forkProtectBelow from the DB knows to ignore it.
-		if setErr := srcMeta.SetCounter("forkProtectCleared", 1); setErr != nil {
-			logger.Warnf("set forkProtectCleared: %v", setErr)
-		}
+		markForkProtectionClearedWithLeaseRecheck(ctx.Context, srcMeta, blob, srcFormat.Name, "after release")
 		logger.Infof("All fork leases released — GC on %s can now reclaim pre-fork objects", srcFormat.Name)
 		logger.Infof("Run `juicefs gc %s --delete` to reclaim space", utils.RemovePassword(srcURI))
 	} else {

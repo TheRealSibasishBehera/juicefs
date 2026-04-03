@@ -300,8 +300,8 @@ Manifest schema:
 - `forkSharedStorage = 1`
 - `forkProtectBelow = forkBaseChunk`
 
-If `fork dump` fails after lease creation, it attempts to delete the lease and sets
-`forkProtectCleared=1` when no leases remain.
+If `fork dump` fails after lease creation, it attempts to delete the lease and
+advances `forkProtectCleared` beyond `forkProtectRearm` when no leases remain.
 
 ### Component 4 — Fix `prefix.go` Copy Bug
 

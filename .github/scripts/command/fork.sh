@@ -2181,6 +2181,17 @@ test_fork_dump_lease_protects_before_load() {
     sync
     umount_jfs $MNT_ORIG "$META_URL"
     JFS_GC_SKIPPEDTIME=0 ./juicefs gc $META_URL --delete
+    GC_SCAN_WITH_LEASE=$(JFS_GC_SKIPPEDTIME=0 ./juicefs gc $META_URL 2>&1 | grep -oP 'scanned \d+' | grep -oP '\d+' || echo "0")
+    if [[ "$GC_SCAN_WITH_LEASE" -eq 0 ]]; then
+        echo "<FATAL> expected protected objects to remain before fork load (lease active)"
+        exit 1
+    fi
+
+    # Source metadata path should be gone after delete+GC.
+    ./juicefs mount -d $META_URL $MNT_ORIG --no-usage-report
+    sleep 1
+    assert_file_missing $MNT_ORIG/protected-before-load.txt
+    umount_jfs $MNT_ORIG "$META_URL"
 
     # Now load fork and verify protected content is still readable.
     ./juicefs fork load $FORK_META_URL --path "$DUMP_PATH"
@@ -2227,8 +2238,13 @@ test_fork_deferred_load_corrupt_dump() {
     # Overwrite with malformed JSON so load must fail deterministically.
     printf '{invalid-json\n' > "$DUMP_PATH"
 
-    if ./juicefs fork load $FORK_META_URL --path "$DUMP_PATH" 2>&1; then
+    if LOAD_ERR=$(./juicefs fork load $FORK_META_URL --path "$DUMP_PATH" 2>&1); then
         echo "<FATAL> fork load should fail on corrupted dump data"
+        exit 1
+    fi
+    if [[ "$LOAD_ERR" != *"load json dump"* ]]; then
+        echo "<FATAL> unexpected fork load failure path for corrupt dump"
+        echo "$LOAD_ERR"
         exit 1
     fi
     echo "fork load failed on corrupted dump as expected — OK"
@@ -2236,6 +2252,75 @@ test_fork_deferred_load_corrupt_dump() {
     ./juicefs fork release $META_URL --fork-name deferred-corrupt
     python3 .github/scripts/flush_meta.py "$FORK_META_URL" 2>/dev/null || true
     rm -f "$DUMP_PATH" "$MANIFEST_PATH"
+    flush_fork_sqlite_dbs
+}
+
+# =============================================================================
+# test_fork_deferred_dump_rollback_on_dump_error
+#
+# If fork dump fails after lease reservation (e.g. dump path is invalid),
+# rollback must remove the temporary lease and GC should not stay blocked.
+# =============================================================================
+test_fork_deferred_dump_rollback_on_dump_error() {
+    local BAD_DIR=/tmp/jfs-fork-dump-rollback-dir
+    local BAD_DUMP_PATH=${BAD_DIR}/meta.json
+    local FAILED_NAME=deferred-rollback-failed
+    local SEED_NAME=deferred-rollback-seed
+    local GC_OUT=""
+
+    setup_two_mounts
+    rm -rf "$BAD_DIR"
+
+    ./juicefs format $META_URL myjfs --trash-days 0
+    ./juicefs mount -d $META_URL $MNT_ORIG --no-usage-report
+    sleep 1
+    echo "seed" > $MNT_ORIG/seed.txt
+    sync
+
+    # First create+release a seed fork so the next fork-dump path re-arms
+    # protection counters before failing.
+    ./juicefs fork $META_URL $FORK_META_URL --name "$SEED_NAME"
+    SEED_UUID=$(./juicefs status $FORK_META_URL 2>&1 | grep -oP '"UUID":\s*"[^"]+"' | grep -oP '[0-9a-f-]{36}' | head -1)
+    if [[ -z "$SEED_UUID" ]]; then
+        echo "<FATAL> could not get seed fork UUID"
+        exit 1
+    fi
+    ./juicefs destroy --yes "$FORK_META_URL" "$SEED_UUID"
+    ./juicefs fork release $META_URL --fork-name "$SEED_NAME"
+
+    umount_jfs $MNT_ORIG "$META_URL"
+
+    # This must fail after lease reservation because target directory is missing.
+    if DUMP_ERR=$(./juicefs fork dump $META_URL --path "$BAD_DUMP_PATH" --name "$FAILED_NAME" 2>&1); then
+        echo "<FATAL> fork dump should fail on invalid dump path"
+        exit 1
+    fi
+    if [[ "$DUMP_ERR" != *"dump metadata to"* ]]; then
+        echo "<FATAL> unexpected fork dump failure path"
+        echo "$DUMP_ERR"
+        exit 1
+    fi
+
+    # Rollback should have removed the temporary lease.
+    FORK_LIST=$(./juicefs fork list $META_URL)
+    if [[ "$FORK_LIST" == *"$FAILED_NAME"* ]]; then
+        echo "<FATAL> rollback failed: temporary lease still listed after failed fork dump"
+        exit 1
+    fi
+    if ./juicefs fork release $META_URL --fork-name "$FAILED_NAME" 2>&1; then
+        echo "<FATAL> rollback failed: failed dump lease is still releasable"
+        exit 1
+    fi
+
+    GC_OUT=$(JFS_GC_SKIPPEDTIME=0 ./juicefs gc $META_URL 2>&1)
+    if [[ "$GC_OUT" == *"Fork protection active: protecting objects"* ]]; then
+        echo "<FATAL> GC still reports active fork protection after failed dump rollback with no leases"
+        echo "$GC_OUT"
+        exit 1
+    fi
+    JFS_GC_SKIPPEDTIME=0 ./juicefs gc $META_URL --delete
+
+    rm -rf "$BAD_DIR"
     flush_fork_sqlite_dbs
 }
 
@@ -2374,7 +2459,8 @@ test_fork_dump_load_independent_volume() {
 # test_fork_gc_cleans_up_after_all_forks_released
 #
 # After releasing ALL forks, GC must fully reclaim all unreferenced objects.
-# Specifically: forkProtectCleared=1 and no active leases → GC runs freely.
+# Specifically: no active leases and protection counters marked cleared
+# (forkProtectCleared advanced beyond forkProtectRearm) → GC runs freely.
 # Verifies that the "cleared" path actually unblocks reclamation end-to-end.
 # =============================================================================
 test_fork_gc_cleans_up_after_all_forks_released() {
