@@ -177,9 +177,6 @@ Examples:
 				ArgsUsage: "SRC-META-URL",
 			},
 		},
-		// Allow `juicefs fork SRC DST` as a shorthand for `juicefs fork create SRC DST`
-		Action:    forkCreate,
-		ArgsUsage: "SRC-META-URL DST-META-URL",
 		// Flags are defined here at the parent level so reorderOptions can see them
 		// (it only descends one level).  All subcommands share these flags.
 		Flags: []cli.Flag{
