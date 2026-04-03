@@ -1,6 +1,15 @@
 name: publish-mount-image
 
 on:
+  push:
+    branches:
+      - feat/volume-fork-deferred
+    paths:
+      - ".github/workflows/publish-mount-image.yml"
+      - ".github/scripts/chaos/juicefs.Dockerfile"
+      - ".github/actions/build/action.yml"
+      - "Makefile"
+      - "**.go"
   workflow_dispatch:
     inputs:
       tag:
