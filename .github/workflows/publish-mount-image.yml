@@ -30,8 +30,13 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Build JuiceFS
-        uses: ./.github/actions/build
+      - name: Build JuiceFS (static)
+        shell: bash
+        run: |
+          sudo .github/scripts/apt_install.sh musl-tools upx-ucl
+          export STATIC=1
+          make juicefs
+          ./juicefs version
 
       - name: Resolve image metadata
         id: meta
