@@ -127,7 +127,7 @@ test_fork_basic() {
     ORIG_HASH=$(md5_of $MNT_ORIG/data/binary.bin)
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -158,7 +158,7 @@ test_fork_post_write_isolation() {
     echo "pre-fork" > $MNT_ORIG/pre.txt
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -190,7 +190,7 @@ test_fork_delete_from_original_invisible_to_fork() {
     BIN_HASH=$(md5_of $MNT_ORIG/deleteme.bin)
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -227,7 +227,7 @@ test_fork_delete_from_fork_invisible_to_original() {
     echo "will be deleted from fork" > $MNT_ORIG/deleteme-fork.txt
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -258,7 +258,7 @@ test_fork_overwrite_isolation() {
     echo "version-1" > $MNT_ORIG/shared.txt
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -296,7 +296,7 @@ test_fork_same_path_different_content() {
     sleep 1
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -339,7 +339,7 @@ test_fork_truncate_isolation() {
     FULL_HASH=$(md5_of $MNT_ORIG/truncate-me.bin)
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -374,7 +374,7 @@ test_fork_symlink_isolation() {
     ln -s target.txt $MNT_ORIG/pre-fork-link
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -425,7 +425,7 @@ test_fork_hardlink_isolation() {
     ln $MNT_ORIG/hardlink-a.txt $MNT_ORIG/hardlink-b.txt
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -482,7 +482,7 @@ test_fork_xattr_isolation() {
     esac
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report --enable-xattr
     sleep 1
 
@@ -550,7 +550,7 @@ test_fork_gc_does_not_destroy_fork_data() {
     PROTECTED_HASH=$(md5_of $MNT_ORIG/protected.bin)
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -588,7 +588,7 @@ test_fork_gc_cleans_own_deleted_data() {
     echo "orig baseline" > $MNT_ORIG/baseline.txt
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -646,8 +646,8 @@ test_fork_multiple_forks_independent() {
     echo "shared pre-fork content" > $MNT_ORIG/shared.txt
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL   --name myjfs-fork-a
-    ./juicefs fork $META_URL $FORK_META_URL_B --name myjfs-fork-b
+    ./juicefs fork create $META_URL $FORK_META_URL   --name myjfs-fork-a
+    ./juicefs fork create $META_URL $FORK_META_URL_B --name myjfs-fork-b
     ./juicefs mount -d $FORK_META_URL   $MNT_FORK   --no-usage-report
     ./juicefs mount -d $FORK_META_URL_B $MNT_FORK_B --no-usage-report
     sleep 1
@@ -701,14 +701,14 @@ test_fork_of_fork() {
     sync
 
     # Fork original → fork1
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
     echo "fork1-data" > $MNT_FORK/fork1.txt
     sync
 
     # Fork fork1 → fork2
-    ./juicefs fork $FORK_META_URL $FORK2_META_URL --name myjfs-fork2
+    ./juicefs fork create $FORK_META_URL $FORK2_META_URL --name myjfs-fork2
     ./juicefs mount -d $FORK2_META_URL $MNT_FORK2 --no-usage-report
     sleep 1
 
@@ -742,7 +742,7 @@ test_fork_rename_isolation() {
     echo "rename-test" > $MNT_ORIG/before.txt
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -773,7 +773,7 @@ test_fork_directory_isolation() {
     echo "content" > $MNT_ORIG/shared-dir/file.txt
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -807,7 +807,7 @@ test_fork_concurrent_writes_no_collision() {
     sleep 1
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -849,7 +849,7 @@ test_fork_binary_integrity_large_file() {
     LARGE_HASH=$(md5_of $MNT_ORIG/large.bin)
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -887,7 +887,7 @@ test_fork_no_data_copy_on_create() {
     sync
 
     FORK_START=$(date +%s)
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     FORK_END=$(date +%s)
     FORK_ELAPSED=$((FORK_END - FORK_START))
 
@@ -918,7 +918,7 @@ test_fork_idempotent_meta_url() {
     sync
 
     set +e
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork-2
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork-2
     EXIT_CODE=$?
     set -e
 
@@ -955,8 +955,8 @@ test_fork_list_shows_active_forks() {
     ./juicefs mount -d $META_URL $MNT_ORIG --no-usage-report
     sleep 1
 
-    ./juicefs fork $META_URL $FORK_META_URL   --name myjfs-fork-list-a
-    ./juicefs fork $META_URL $FORK_META_URL_B --name myjfs-fork-list-b
+    ./juicefs fork create $META_URL $FORK_META_URL   --name myjfs-fork-list-a
+    ./juicefs fork create $META_URL $FORK_META_URL_B --name myjfs-fork-list-b
 
     FORK_LIST=$(./juicefs fork list $META_URL)
     echo "$FORK_LIST" | grep -q "myjfs-fork-list-a" || {
@@ -992,7 +992,7 @@ test_fork_destroy_releases_gc() {
     dd if=/dev/urandom of=$MNT_ORIG/reclaimable.bin bs=1M count=8 2>/dev/null
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -1069,7 +1069,7 @@ skip_test_fork_live_source() {
     sleep 1  # Let writer get some files in
 
     # Fork while writer is active
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     FORK_EXIT=$?
 
     wait $WRITER_PID || true
@@ -1108,7 +1108,7 @@ test_fork_destroy_protection() {
     dd if=/dev/urandom of=$MNT_ORIG/shared.bin bs=1M count=4 2>/dev/null
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
 
     # --- Guard 1: destroy source while fork lease is active must be refused ---
     # Get fork UUID from the fork's own metadata
@@ -1185,7 +1185,7 @@ test_fork_gc_does_not_destroy_fork_data_via_fork_gc() {
     sync
 
     # Fork = take a checkpoint
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -1240,8 +1240,8 @@ test_fork_multi_checkpoint_gc_blocked_until_all_released() {
     sync
 
     # Two checkpoints
-    ./juicefs fork $META_URL $FORK_META_URL   --name ckpt-a
-    ./juicefs fork $META_URL $FORK_META_URL_B --name ckpt-b
+    ./juicefs fork create $META_URL $FORK_META_URL   --name ckpt-a
+    ./juicefs fork create $META_URL $FORK_META_URL_B --name ckpt-b
     ./juicefs mount -d $FORK_META_URL   $MNT_FORK   --no-usage-report
     ./juicefs mount -d $FORK_META_URL_B $MNT_FORK_B --no-usage-report
     sleep 1
@@ -1316,7 +1316,7 @@ test_fork_restore_workflow() {
     sync
 
     # Take a checkpoint (fork)
-    ./juicefs fork $META_URL $FORK_META_URL --name checkpoint-v1
+    ./juicefs fork create $META_URL $FORK_META_URL --name checkpoint-v1
 
     # "Corrupt" the source by overwriting and adding garbage
     echo "corrupted" > $MNT_ORIG/important.txt
@@ -1368,7 +1368,7 @@ test_fork_protection_survives_source_restart() {
     sync
 
     # Take checkpoint (fork)
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -1420,7 +1420,7 @@ test_fork_pre_fork_data_survives_compaction() {
     sync
 
     # Take a checkpoint before compaction
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -1508,8 +1508,8 @@ test_fork_source_delete_then_checkpoint_survives() {
     sync
 
     # --- Step 2+3: Fork source → fork-a and fork-b (both checkpoints of v0) ---
-    ./juicefs fork $META_URL $FORK_META_A --name fork-a
-    ./juicefs fork $META_URL $FORK_META_B --name fork-b
+    ./juicefs fork create $META_URL $FORK_META_A --name fork-a
+    ./juicefs fork create $META_URL $FORK_META_B --name fork-b
 
     ./juicefs mount -d $FORK_META_A $MNT_A --no-usage-report
     ./juicefs mount -d $FORK_META_B $MNT_B --no-usage-report
@@ -1530,8 +1530,8 @@ test_fork_source_delete_then_checkpoint_survives() {
     sync
 
     # --- Step 5+6: Checkpoint each fork ---
-    ./juicefs fork $FORK_META_A $CKPT_META_A --name ckpt-a
-    ./juicefs fork $FORK_META_B $CKPT_META_B --name ckpt-b
+    ./juicefs fork create $FORK_META_A $CKPT_META_A --name ckpt-a
+    ./juicefs fork create $FORK_META_B $CKPT_META_B --name ckpt-b
 
     ./juicefs mount -d $CKPT_META_A $MNT_CA --no-usage-report
     ./juicefs mount -d $CKPT_META_B $MNT_CB --no-usage-report
@@ -1660,8 +1660,8 @@ test_fork_sibling_gc_isolation() {
     umount_jfs $MNT_ORIG "$META_URL"
 
     # Both forks inherit the same pre-fork chunk
-    ./juicefs fork $META_URL $FORK_META_A --name fork-a
-    ./juicefs fork $META_URL $FORK_META_B --name fork-b
+    ./juicefs fork create $META_URL $FORK_META_A --name fork-a
+    ./juicefs fork create $META_URL $FORK_META_B --name fork-b
     ./juicefs mount -d $FORK_META_A $MNT_A --no-usage-report
     ./juicefs mount -d $FORK_META_B $MNT_B --no-usage-report
     sleep 1
@@ -1730,7 +1730,7 @@ test_fork_checkpoint_of_checkpoint_gc_chain() {
     sync
 
     # Level 1: fork source → fork1, add fork1-level data
-    ./juicefs fork $META_URL $FORK1_META --name fork1
+    ./juicefs fork create $META_URL $FORK1_META --name fork1
     ./juicefs mount -d $FORK1_META $MNT1 --no-usage-report
     sleep 1
     dd if=/dev/urandom of=$MNT1/level1.bin bs=1M count=2 2>/dev/null
@@ -1738,7 +1738,7 @@ test_fork_checkpoint_of_checkpoint_gc_chain() {
     sync
 
     # Level 2: fork fork1 → fork2 (checkpoint of the checkpoint)
-    ./juicefs fork $FORK1_META $FORK2_META --name fork2
+    ./juicefs fork create $FORK1_META $FORK2_META --name fork2
     ./juicefs mount -d $FORK2_META $MNT2 --no-usage-report
     sleep 1
 
@@ -1808,8 +1808,8 @@ test_fork_recreate_after_full_release() {
     sync
 
     # First round: create A and B, release both → sets forkProtectCleared=1
-    ./juicefs fork $META_URL $FORK_META_A --name fork-a
-    ./juicefs fork $META_URL $FORK_META_B --name fork-b
+    ./juicefs fork create $META_URL $FORK_META_A --name fork-a
+    ./juicefs fork create $META_URL $FORK_META_B --name fork-b
     ./juicefs fork release $META_URL --fork-name fork-b
     ./juicefs fork release $META_URL --fork-name fork-a
     # At this point forkProtectCleared=1 in source DB
@@ -1819,7 +1819,7 @@ test_fork_recreate_after_full_release() {
     R2_HASH=$(md5_of $MNT_ORIG/round2.bin)
     sync
 
-    ./juicefs fork $META_URL $FORK_META_C --name fork-c
+    ./juicefs fork create $META_URL $FORK_META_C --name fork-c
     ./juicefs mount -d $FORK_META_C $MNT_C --no-usage-report
     sleep 1
 
@@ -1865,7 +1865,7 @@ test_fork_trash_days_protection() {
     TRASH_HASH=$(md5_of $MNT_ORIG/will-trash.bin)
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -1915,11 +1915,11 @@ test_fork_duplicate_name_rejected() {
     sync
 
     # First fork with name "my-snapshot" — succeeds
-    ./juicefs fork $META_URL $FORK_META_A --name my-snapshot
+    ./juicefs fork create $META_URL $FORK_META_A --name my-snapshot
     echo "first fork succeeded — OK"
 
     # Second fork with same name to different destination — should fail
-    if ./juicefs fork $META_URL $FORK_META_B --name my-snapshot 2>&1; then
+    if ./juicefs fork create $META_URL $FORK_META_B --name my-snapshot 2>&1; then
         echo "<FATAL> second fork with same name should have been rejected"
         exit 1
     fi
@@ -1948,7 +1948,7 @@ test_fork_release_twice_fails_cleanly() {
     echo "data" > $MNT_ORIG/file.txt
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
 
     # First release — succeeds
     ./juicefs fork release $META_URL --fork-name myjfs-fork
@@ -1989,7 +1989,7 @@ test_fork_orphan_lease_in_bucket() {
     HASH=$(md5_of $MNT_ORIG/protected.bin)
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
 
     # Simulate: fork DB was wiped (orphan lease remains in bucket)
     python3 .github/scripts/flush_meta.py "$FORK_META_URL"
@@ -2065,7 +2065,7 @@ test_fork_compact_source_fork_reads_correctly() {
     sync
 
     # Take checkpoint (fork) before compaction
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
     ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
     sleep 1
 
@@ -2279,7 +2279,7 @@ test_fork_deferred_dump_rollback_on_dump_error() {
 
     # First create+release a seed fork so the next fork-dump path re-arms
     # protection counters before failing.
-    ./juicefs fork $META_URL $FORK_META_URL --name "$SEED_NAME"
+    ./juicefs fork create $META_URL $FORK_META_URL --name "$SEED_NAME"
     SEED_UUID=$(./juicefs status $FORK_META_URL 2>&1 | grep -oP '"UUID":\s*"[^"]+"' | grep -oP '[0-9a-f-]{36}' | head -1)
     if [[ -z "$SEED_UUID" ]]; then
         echo "<FATAL> could not get seed fork UUID"
@@ -2422,7 +2422,7 @@ test_fork_dump_load_independent_volume() {
     rm -f /tmp/jfs-dumpload.json.gz
 
     # Fork the loaded volume — should work, loaded vol is standalone
-    ./juicefs fork $LOADED_META $LOADED_FORK_META --name loaded-fork
+    ./juicefs fork create $LOADED_META $LOADED_FORK_META --name loaded-fork
 
     FORK_UUID=$(./juicefs status $LOADED_FORK_META 2>&1 | grep -oP '"UUID":\s*"[^"]+"' | grep -oP '[0-9a-f-]{36}' | head -1)
     if [[ -z "$FORK_UUID" ]]; then
@@ -2473,7 +2473,7 @@ test_fork_gc_cleans_up_after_all_forks_released() {
     dd if=/dev/urandom of=$MNT_ORIG/reclaimable.bin bs=1M count=4 2>/dev/null
     sync
 
-    ./juicefs fork $META_URL $FORK_META_URL --name myjfs-fork
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
 
     # Delete from source, GC blocked by lease
     rm -f $MNT_ORIG/reclaimable.bin
@@ -2533,7 +2533,7 @@ test_fork_sqlite_wal_checkpoint() {
     umount_jfs $MNT_ORIG "$META_URL"
 
     # Create fork
-    ./juicefs fork $META_URL $FORK_META_URL --name wal-ckpt-test
+    ./juicefs fork create $META_URL $FORK_META_URL --name wal-ckpt-test
 
     FORK_DB_PATH="${FORK_META_URL#sqlite3://}"
 
@@ -2572,6 +2572,249 @@ test_fork_sqlite_wal_checkpoint() {
 
     umount_jfs $MNT_FORK "sqlite3://$COPY_DB"
     rm -f "$COPY_DB"
+    flush_fork_sqlite_dbs
+}
+
+# =============================================================================
+# test_fork_release_from_any_peer
+#
+# Expectation: fork release can be performed from ANY volume that shares the
+# same bucket — not just the source.  This is the "no master/slave" invariant:
+# every DB sharing a bucket has equal rights over fork leases.
+#
+# Scenario:
+#   1. Source → Fork A
+#   2. Release A's lease by passing Fork A's own meta URI (not source)
+#   3. Must succeed — lease deleted from shared bucket, protection cleared.
+# =============================================================================
+test_fork_release_from_any_peer() {
+    setup_two_mounts
+
+    ./juicefs format $META_URL myjfs --trash-days 0
+    ./juicefs mount -d $META_URL $MNT_ORIG --no-usage-report
+    sleep 1
+
+    dd if=/dev/urandom of=$MNT_ORIG/data.bin bs=1M count=2 2>/dev/null
+    sync
+    umount_jfs $MNT_ORIG "$META_URL"
+
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
+
+    # Release from the FORK's meta URL — not the source
+    ./juicefs fork release $FORK_META_URL --fork-name myjfs-fork
+
+    # Verify lease is gone — list from source should show empty
+    LEASES=$(./juicefs fork list $META_URL 2>&1)
+    if echo "$LEASES" | grep -q "myjfs-fork"; then
+        echo "<FATAL> lease still visible after release from fork peer"
+        exit 1
+    fi
+    echo "release from fork peer succeeded — OK"
+
+    # Also verify listing from fork peer shows the same result
+    LEASES_FROM_FORK=$(./juicefs fork list $FORK_META_URL 2>&1)
+    if echo "$LEASES_FROM_FORK" | grep -q "myjfs-fork"; then
+        echo "<FATAL> lease still visible when listing from fork peer"
+        exit 1
+    fi
+    echo "fork list from fork peer consistent — OK"
+
+    flush_fork_sqlite_dbs
+}
+
+# =============================================================================
+# test_fork_release_after_source_destroyed
+#
+# Expectation: if the source volume's metadata DB is destroyed (gone), a
+# surviving fork can still release its own lease from the shared bucket.
+#
+# This proves the "no master" architecture: leases live in the bucket, and
+# any volume with access to that bucket can manage them.
+#
+# Scenario:
+#   1. Source → Fork A
+#   2. Destroy source DB entirely
+#   3. Release A's lease using Fork A's meta URI
+#   4. Must succeed — bucket lease deleted, fork list (from fork) shows empty
+# =============================================================================
+test_fork_release_after_source_destroyed() {
+    setup_two_mounts
+
+    ./juicefs format $META_URL myjfs --trash-days 0
+    ./juicefs mount -d $META_URL $MNT_ORIG --no-usage-report
+    sleep 1
+
+    dd if=/dev/urandom of=$MNT_ORIG/data.bin bs=1M count=2 2>/dev/null
+    sync
+    umount_jfs $MNT_ORIG "$META_URL"
+
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
+
+    # Nuke the source DB — simulating source volume deletion
+    SRC_DB="${META_URL#sqlite3://}"
+    rm -f "$SRC_DB" "${SRC_DB}-wal" "${SRC_DB}-shm"
+
+    # Release from the fork — source is gone
+    ./juicefs fork release $FORK_META_URL --fork-name myjfs-fork
+
+    # Verify lease is gone — list from fork should show empty
+    LEASES=$(./juicefs fork list $FORK_META_URL 2>&1)
+    if echo "$LEASES" | grep -q "myjfs-fork"; then
+        echo "<FATAL> lease still visible after release (source destroyed)"
+        exit 1
+    fi
+    echo "release after source destroyed succeeded — OK"
+
+    # Fork should still be mountable
+    ./juicefs mount -d $FORK_META_URL $MNT_FORK --no-usage-report
+    sleep 1
+    assert_file_exists $MNT_FORK/data.bin
+    echo "fork still mountable after source destroyed — OK"
+
+    umount_jfs $MNT_FORK "$FORK_META_URL"
+    flush_fork_sqlite_dbs
+}
+
+# =============================================================================
+# test_fork_of_fork_release_from_grandchild
+#
+# Expectation: in a chain Source → Fork A → Fork B, releasing Fork A's
+# lease can be done from Fork B's meta URI.  All three share one bucket;
+# any peer can manage any lease.
+# =============================================================================
+test_fork_of_fork_release_from_grandchild() {
+    setup_two_mounts
+
+    local FORK_B_META="sqlite3:///tmp/jfs-fork-test-fork-b.db"
+    local MNT_FORK_B=/jfs-fork-b
+    mkdir -p $MNT_FORK_B
+
+    ./juicefs format $META_URL myjfs --trash-days 0
+    ./juicefs mount -d $META_URL $MNT_ORIG --no-usage-report
+    sleep 1
+
+    echo "grandparent" > $MNT_ORIG/root.txt
+    sync
+    umount_jfs $MNT_ORIG "$META_URL"
+
+    # Source → Fork A
+    ./juicefs fork create $META_URL $FORK_META_URL --name fork-a
+
+    # Fork A → Fork B
+    ./juicefs fork create $FORK_META_URL $FORK_B_META --name fork-b
+
+    # Release Fork A's lease from Fork B's URI
+    ./juicefs fork release $FORK_B_META --fork-name fork-a
+
+    # Verify fork-a lease is gone, fork-b still present
+    LEASES=$(./juicefs fork list $META_URL 2>&1)
+    if echo "$LEASES" | grep -q "fork-a"; then
+        echo "<FATAL> fork-a lease still visible after release from grandchild"
+        exit 1
+    fi
+    if ! echo "$LEASES" | grep -q "fork-b"; then
+        echo "<FATAL> fork-b lease should still be active"
+        exit 1
+    fi
+    echo "release fork-a from grandchild (fork-b) succeeded — OK"
+
+    # Cleanup
+    ./juicefs fork release $META_URL --fork-name fork-b
+    umount_jfs $MNT_FORK_B "$FORK_B_META" 2>/dev/null || true
+    rm -f /tmp/jfs-fork-test-fork-b.db /tmp/jfs-fork-test-fork-b.db-wal /tmp/jfs-fork-test-fork-b.db-shm
+    flush_fork_sqlite_dbs
+}
+
+# =============================================================================
+# test_fork_list_from_fork_peer
+#
+# Expectation: `fork list` called with a fork's own meta URI returns the same
+# lease information as when called with the source's meta URI.  This verifies
+# the "no master/slave" invariant for the list subcommand while both source
+# and fork are alive and leases are active.
+# =============================================================================
+test_fork_list_from_fork_peer() {
+    setup_two_mounts
+
+    ./juicefs format $META_URL myjfs --trash-days 0
+    ./juicefs mount -d $META_URL $MNT_ORIG --no-usage-report
+    sleep 1
+
+    echo "data" > $MNT_ORIG/file.txt
+    sync
+    umount_jfs $MNT_ORIG "$META_URL"
+
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
+
+    # List from source
+    LEASES_SRC=$(./juicefs fork list $META_URL 2>&1)
+    if ! echo "$LEASES_SRC" | grep -q "myjfs-fork"; then
+        echo "<FATAL> lease not visible when listing from source"
+        exit 1
+    fi
+
+    # List from fork — must show the same lease
+    LEASES_FORK=$(./juicefs fork list $FORK_META_URL 2>&1)
+    if ! echo "$LEASES_FORK" | grep -q "myjfs-fork"; then
+        echo "<FATAL> lease not visible when listing from fork peer"
+        exit 1
+    fi
+    echo "fork list from fork peer shows active leases — OK"
+
+    # Cleanup
+    ./juicefs fork release $META_URL --fork-name myjfs-fork
+    flush_fork_sqlite_dbs
+}
+
+# =============================================================================
+# test_fork_gc_reclaims_after_cross_peer_release
+#
+# Expectation: when a fork lease is released from the fork's own meta URI
+# (not the source), GC on the SOURCE must still reclaim pre-fork objects.
+#
+# This is the critical GC + "no master/slave" scenario.  The source's DB
+# counters are NOT updated by the cross-peer release, so GC must consult the
+# bucket (authoritative) and see zero leases → protection off → reclaim.
+# =============================================================================
+test_fork_gc_reclaims_after_cross_peer_release() {
+    setup_two_mounts
+
+    ./juicefs format $META_URL myjfs --trash-days 0
+    ./juicefs mount -d $META_URL $MNT_ORIG --no-usage-report
+    sleep 1
+
+    dd if=/dev/urandom of=$MNT_ORIG/reclaimable.bin bs=1M count=4 2>/dev/null
+    sync
+
+    ./juicefs fork create $META_URL $FORK_META_URL --name myjfs-fork
+
+    # Delete from source so chunks become reclaimable once protection lifts
+    rm -f $MNT_ORIG/reclaimable.bin
+    sync
+    umount_jfs $MNT_ORIG "$META_URL"
+
+    # GC with lease active — objects must survive
+    JFS_GC_SKIPPEDTIME=0 ./juicefs gc $META_URL --delete
+    OBJS_BEFORE=$(JFS_GC_SKIPPEDTIME=0 ./juicefs gc $META_URL 2>&1 | grep -oP 'scanned \d+' | grep -oP '\d+' || echo "0")
+    if [[ "$OBJS_BEFORE" -eq 0 ]]; then
+        echo "<FATAL> expected objects to survive GC while lease active"
+        exit 1
+    fi
+    echo "objects protected while lease active (scanned=$OBJS_BEFORE) — OK"
+
+    # Release from the FORK (not source) — source DB counters NOT updated
+    ./juicefs fork release $FORK_META_URL --fork-name myjfs-fork
+
+    # GC on SOURCE must still reclaim — bucket has no leases
+    JFS_GC_SKIPPEDTIME=0 ./juicefs gc $META_URL --delete
+    OBJS_AFTER=$(JFS_GC_SKIPPEDTIME=0 ./juicefs gc $META_URL 2>&1 | grep -oP 'scanned \d+' | grep -oP '\d+' || echo "0")
+
+    if [[ "$OBJS_AFTER" -ge "$OBJS_BEFORE" ]]; then
+        echo "<FATAL> GC on source did not reclaim after cross-peer release (before=$OBJS_BEFORE after=$OBJS_AFTER)"
+        exit 1
+    fi
+    echo "GC reclaimed after cross-peer release (before=$OBJS_BEFORE after=$OBJS_AFTER) — OK"
+
     flush_fork_sqlite_dbs
 }
 

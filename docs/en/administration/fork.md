@@ -34,26 +34,24 @@ The primary use cases are:
 # Create a fork
 juicefs fork redis://src-host/1 redis://dst-host/2 --name my-checkpoint
 
-# List active forks of the source volume
+# List active forks (from any peer sharing the bucket)
 juicefs fork list redis://src-host/1
 
 # Mount the fork as a normal volume
 juicefs mount redis://dst-host/2 /mnt/checkpoint
 
-# When done, destroy the fork and release its lease
+# When done, destroy the fork and release its lease (from any peer)
 juicefs destroy redis://dst-host/2 <FORK-UUID>
-juicefs fork release redis://src-host/1 --fork-name my-checkpoint
+juicefs fork release redis://dst-host/2 --fork-name my-checkpoint
 ```
 
 ## Commands
 
-### `juicefs fork create` (or `juicefs fork`)
+### `juicefs fork create`
 
 Forks the source volume into the destination.
 
 ```shell
-juicefs fork <SRC-META-URL> <DST-META-URL> [flags]
-# or equivalently:
 juicefs fork create <SRC-META-URL> <DST-META-URL> [flags]
 ```
 
@@ -126,10 +124,10 @@ juicefs fork load <DST-META-URL> --path <DUMP-FILE> [flags]
 
 ### `juicefs fork list`
 
-Lists all active fork leases of a volume.
+Lists all active fork leases. Can be run from **any volume** sharing the bucket — source, fork, or fork-of-fork.
 
 ```shell
-juicefs fork list <SRC-META-URL>
+juicefs fork list <META-URL>
 ```
 
 Example output:
@@ -145,13 +143,13 @@ Active forks of myvol:
 
 ### `juicefs fork release`
 
-Removes the fork lease from the bucket. Run this **after** destroying the fork volume.
+Removes the fork lease from the bucket. Run this **after** destroying the fork volume. Can be run from **any volume** sharing the bucket — there is no master/slave distinction.
 
 ```shell
-juicefs fork release <SRC-META-URL> --fork-name <name>
+juicefs fork release <META-URL> --fork-name <name>
 ```
 
-Once the last lease is released, GC on the source can reclaim space that was only needed by the fork:
+Once the last lease is released, GC on any peer can reclaim space that was only needed by the fork:
 
 ```shell
 juicefs gc redis://src-host/1 --delete
@@ -170,7 +168,7 @@ juicefs fork redis://prod/1 sqlite3:///tmp/checkpoint.db --name pre-migration
 
 # 3a. Success — destroy the checkpoint and free space
 juicefs destroy sqlite3:///tmp/checkpoint.db <CHECKPOINT-UUID>
-juicefs fork release redis://prod/1 --fork-name pre-migration
+juicefs fork release sqlite3:///tmp/checkpoint.db --fork-name pre-migration
 juicefs gc redis://prod/1 --delete
 
 # 3b. Failure — restore by treating the checkpoint as the new production volume
@@ -201,9 +199,9 @@ juicefs fork redis://prod/1 redis://staging/1 --name staging-$(date +%Y%m%d)
 juicefs mount redis://staging/1 /mnt/staging --no-usage-report
 
 # Developers work on /mnt/staging — production is unaffected
-# When done, destroy staging and release the lease
+# When done, destroy staging and release the lease (from any peer)
 juicefs destroy redis://staging/1 <UUID>
-juicefs fork release redis://prod/1 --fork-name staging-$(date +%Y%m%d)
+juicefs fork release redis://staging/1 --fork-name staging-$(date +%Y%m%d)
 ```
 
 ## Destroying a fork
@@ -214,8 +212,8 @@ Use `juicefs destroy` on the fork's metadata URL. Because the fork shares object
 # Destroy the fork (metadata only — objects are not deleted)
 juicefs destroy redis://fork-host/2 <FORK-UUID>
 
-# Release the lease so the source GC can reclaim pre-fork space
-juicefs fork release redis://src-host/1 --fork-name my-checkpoint
+# Release the lease from any peer sharing the bucket
+juicefs fork release redis://fork-host/2 --fork-name my-checkpoint
 ```
 
 :::warning

@@ -86,19 +86,20 @@ no data is copied at fork time. Both volumes operate independently after the
 fork point — different metadata databases, different object namespaces for
 new writes.
 
-Pre-fork objects are protected from GC on the source volume as long as the
-fork lease exists. Destroy the fork and release its lease to allow the source
-volume's GC to reclaim that space.
+Pre-fork objects are protected from GC as long as the fork lease exists in
+the shared bucket. Destroy the fork and release its lease to allow GC to
+reclaim that space. The list and release subcommands can be run from ANY
+volume that shares the bucket — there is no master/slave distinction.
 
 Examples:
   # Fork a volume
-  $ juicefs fork redis://localhost/1 redis://localhost/2 --name myvol-fork
+  $ juicefs fork create redis://localhost/1 redis://localhost/2 --name myvol-fork
 
-  # List active forks of a volume
+  # List active forks (from any peer sharing the bucket)
   $ juicefs fork list redis://localhost/1
 
-  # Release a fork lease (run after juicefs destroy on the fork)
-  $ juicefs fork release redis://localhost/1 --fork-name myvol-fork`,
+  # Release a fork lease from any peer (run after juicefs destroy on the fork)
+  $ juicefs fork release redis://localhost/2 --fork-name myvol-fork`,
 		Subcommands: []*cli.Command{
 			{
 				Name:      "create",
@@ -167,14 +168,14 @@ Examples:
 			{
 				Name:      "list",
 				Action:    forkList,
-				Usage:     "List active forks of a volume",
-				ArgsUsage: "SRC-META-URL",
+				Usage:     "List active forks (from any peer sharing the bucket)",
+				ArgsUsage: "META-URL",
 			},
 			{
 				Name:      "release",
 				Action:    forkRelease,
-				Usage:     "Release a fork lease (run after destroying the fork)",
-				ArgsUsage: "SRC-META-URL",
+				Usage:     "Release a fork lease from any peer (run after destroying the fork)",
+				ArgsUsage: "META-URL",
 			},
 		},
 		// Flags are defined here at the parent level so reorderOptions can see them
@@ -660,14 +661,14 @@ func nextForkProtectRearm(cleared, rearm int64) (int64, bool) {
 	return cleared + 1, true
 }
 
-func ensureForkProtectionRearmed(srcMeta meta.Meta, reason string) {
+func ensureForkProtectionRearmed(m meta.Meta, reason string) {
 	for i := 0; i < 3; i++ {
-		clearedVal, err := srcMeta.GetCounter("forkProtectCleared")
+		clearedVal, err := m.GetCounter("forkProtectCleared")
 		if err != nil {
 			logger.Warnf("read forkProtectCleared %s: %v", reason, err)
 			return
 		}
-		rearmVal, err := srcMeta.GetCounter("forkProtectRearm")
+		rearmVal, err := m.GetCounter("forkProtectRearm")
 		if err != nil {
 			logger.Warnf("read forkProtectRearm %s: %v", reason, err)
 			return
@@ -676,7 +677,7 @@ func ensureForkProtectionRearmed(srcMeta meta.Meta, reason string) {
 		if !need {
 			return
 		}
-		if setErr := srcMeta.SetCounter("forkProtectRearm", target); setErr != nil {
+		if setErr := m.SetCounter("forkProtectRearm", target); setErr != nil {
 			// Concurrent updates can race this monotonic set; retry.
 			if strings.Contains(setErr.Error(), "must be greater than current") {
 				continue
@@ -684,46 +685,46 @@ func ensureForkProtectionRearmed(srcMeta meta.Meta, reason string) {
 			logger.Warnf("set forkProtectRearm=%d %s: %v", target, reason, setErr)
 			return
 		}
-		logger.Infof("Re-armed fork protection in source DB (cleared=%d, rearm=%d)", clearedVal, target)
+		logger.Infof("Re-armed fork protection (cleared=%d, rearm=%d)", clearedVal, target)
 		return
 	}
 	logger.Warnf("failed to re-arm fork protection %s after retries", reason)
 }
 
-func markForkProtectionCleared(srcMeta meta.Meta, reason string) {
-	clearedVal, err := srcMeta.GetCounter("forkProtectCleared")
+func markForkProtectionCleared(m meta.Meta, reason string) {
+	clearedVal, err := m.GetCounter("forkProtectCleared")
 	if err != nil {
 		logger.Warnf("read forkProtectCleared %s: %v", reason, err)
 		return
 	}
-	rearmVal, err := srcMeta.GetCounter("forkProtectRearm")
+	rearmVal, err := m.GetCounter("forkProtectRearm")
 	if err != nil {
 		logger.Warnf("read forkProtectRearm %s: %v", reason, err)
 		return
 	}
 
 	target := nextForkProtectCleared(clearedVal, rearmVal)
-	if setErr := srcMeta.SetCounter("forkProtectCleared", target); setErr != nil {
+	if setErr := m.SetCounter("forkProtectCleared", target); setErr != nil {
 		logger.Warnf("set forkProtectCleared=%d %s: %v", target, reason, setErr)
 		return
 	}
-	logger.Infof("Marked fork protection cleared in source DB (cleared=%d, rearm=%d, new=%d)",
+	logger.Infof("Marked fork protection cleared (cleared=%d, rearm=%d, new=%d)",
 		clearedVal, rearmVal, target)
 }
 
-func markForkProtectionClearedWithLeaseRecheck(ctx context.Context, srcMeta meta.Meta, blob object.ObjectStorage, sourceName, reason string) {
-	markForkProtectionCleared(srcMeta, reason)
+func markForkProtectionClearedWithLeaseRecheck(ctx context.Context, m meta.Meta, blob object.ObjectStorage, volumeName, reason string) {
+	markForkProtectionCleared(m, reason)
 
-	remaining, err := listForkLeases(ctx, blob, sourceName)
+	remaining, err := listForkLeases(ctx, blob, volumeName)
 	if err != nil {
 		// Be conservative on uncertainty: keep protection armed.
 		logger.Warnf("re-list fork leases %s: %v; conservatively re-arming protection", reason, err)
-		ensureForkProtectionRearmed(srcMeta, reason+" (lease recheck failed)")
+		ensureForkProtectionRearmed(m, reason+" (lease recheck failed)")
 		return
 	}
 	if len(remaining) > 0 {
 		logger.Warnf("detected %d active lease(s) %s after clearing; re-arming protection", len(remaining), reason)
-		ensureForkProtectionRearmed(srcMeta, reason+" (active lease detected)")
+		ensureForkProtectionRearmed(m, reason+" (active lease detected)")
 	}
 }
 
@@ -797,31 +798,32 @@ func readForkManifest(path string) (ForkManifest, error) {
 
 func forkList(ctx *cli.Context) error {
 	setup0(ctx, 1, 1)
-	srcURI := ctx.Args().Get(0)
-	removePassword(srcURI)
+	// Any peer sharing the bucket can list all leases.
+	peerURI := ctx.Args().Get(0)
+	removePassword(peerURI)
 
-	srcMeta := meta.NewClient(srcURI, meta.DefaultConf())
-	srcFormat, err := srcMeta.Load(true)
+	peerMeta := meta.NewClient(peerURI, meta.DefaultConf())
+	peerFormat, err := peerMeta.Load(true)
 	if err != nil {
-		return fmt.Errorf("load source format: %w", err)
+		return fmt.Errorf("load volume format: %w", err)
 	}
 
-	blob, err := createStorage(*srcFormat)
+	blob, err := createStorage(*peerFormat)
 	if err != nil {
 		return fmt.Errorf("connect to object storage: %w", err)
 	}
 
-	leases, err := listForkLeases(ctx.Context, blob, srcFormat.Name)
+	leases, err := listForkLeases(ctx.Context, blob, peerFormat.Name)
 	if err != nil {
 		return fmt.Errorf("list fork leases: %w", err)
 	}
 
 	if len(leases) == 0 {
-		fmt.Printf("No active forks for volume %s\n", srcFormat.Name)
+		fmt.Printf("No active forks for volume %s\n", peerFormat.Name)
 		return nil
 	}
 
-	fmt.Printf("Active forks of %s:\n\n", srcFormat.Name)
+	fmt.Printf("Active forks of %s:\n\n", peerFormat.Name)
 	fmt.Printf("  %-36s  %-24s  %-12s  %s\n", "Fork UUID", "Fork Name", "Base Chunk", "Created At")
 	fmt.Printf("  %s\n", strings.Repeat("-", 90))
 	for _, l := range leases {
@@ -837,16 +839,18 @@ func forkList(ctx *cli.Context) error {
 
 func forkRelease(ctx *cli.Context) error {
 	setup0(ctx, 1, 1)
-	srcURI := ctx.Args().Get(0)
-	removePassword(srcURI)
+	// The URI can be ANY volume that shares the bucket — source, fork, or
+	// fork-of-fork.  All peers have equal rights over the shared lease store.
+	peerURI := ctx.Args().Get(0)
+	removePassword(peerURI)
 
-	srcMeta := meta.NewClient(srcURI, meta.DefaultConf())
-	srcFormat, err := srcMeta.Load(true)
+	peerMeta := meta.NewClient(peerURI, meta.DefaultConf())
+	peerFormat, err := peerMeta.Load(true)
 	if err != nil {
-		return fmt.Errorf("load source format: %w", err)
+		return fmt.Errorf("load volume format: %w", err)
 	}
 
-	blob, err := createStorage(*srcFormat)
+	blob, err := createStorage(*peerFormat)
 	if err != nil {
 		return fmt.Errorf("connect to object storage: %w", err)
 	}
@@ -855,7 +859,7 @@ func forkRelease(ctx *cli.Context) error {
 	if forkName == "" {
 		return fmt.Errorf("--fork-name is required for 'fork release'")
 	}
-	leases, err := listForkLeases(ctx.Context, blob, srcFormat.Name)
+	leases, err := listForkLeases(ctx.Context, blob, peerFormat.Name)
 	if err != nil {
 		return fmt.Errorf("list fork leases: %w", err)
 	}
@@ -868,27 +872,28 @@ func forkRelease(ctx *cli.Context) error {
 		}
 	}
 	if target == nil {
-		return fmt.Errorf("no active fork lease found for fork name %q under volume %s", forkName, srcFormat.Name)
+		return fmt.Errorf("no active fork lease found for fork name %q under volume %s", forkName, peerFormat.Name)
 	}
 
-	leaseKey := forkLeaseKey(srcFormat.Name, target.ForkUUID)
+	leaseKey := forkLeaseKey(peerFormat.Name, target.ForkUUID)
 	if err := blob.Delete(ctx.Context, leaseKey); err != nil {
 		return fmt.Errorf("delete lease object %s: %w", leaseKey, err)
 	}
 
 	logger.Infof("Released fork lease for %q (UUID %s) from volume %s",
-		forkName, target.ForkUUID, srcFormat.Name)
+		forkName, target.ForkUUID, peerFormat.Name)
 
 	// Re-read remaining leases to recalculate the protection threshold.
-	remaining, err := listForkLeases(ctx.Context, blob, srcFormat.Name)
+	remaining, err := listForkLeases(ctx.Context, blob, peerFormat.Name)
 	if err != nil {
 		logger.Warnf("re-list fork leases after release: %v", err)
 	} else if len(remaining) == 0 {
-		// No more active leases — set the "cleared" flag so any process
-		// reading forkProtectBelow from the DB knows to ignore it.
-		markForkProtectionClearedWithLeaseRecheck(ctx.Context, srcMeta, blob, srcFormat.Name, "after release")
-		logger.Infof("All fork leases released — GC on %s can now reclaim pre-fork objects", srcFormat.Name)
-		logger.Infof("Run `juicefs gc %s --delete` to reclaim space", utils.RemovePassword(srcURI))
+		// No more active leases.  Update the protection counter in the
+		// DB we were given as a best-effort cache hint.  GC treats bucket
+		// leases as authoritative, so correctness does not depend on this.
+		markForkProtectionClearedWithLeaseRecheck(ctx.Context, peerMeta, blob, peerFormat.Name, "after release")
+		logger.Infof("All fork leases released — GC can now reclaim pre-fork objects")
+		logger.Infof("Run `juicefs gc <META-URL> --delete` on each peer to reclaim space")
 	} else {
 		// Compute new minimum for remaining leases
 		newMin := remaining[0].ForkBaseChunk

@@ -228,7 +228,7 @@ counter ranges never overlap with each other or with the original.
 ### Component 3 — `juicefs fork` Commands
 
 ```
-juicefs fork <src-meta> <dst-meta> [--name <fork-name>]
+juicefs fork create <src-meta> <dst-meta> [--name <fork-name>]
 ```
 
 **Full execution flow**:
@@ -379,16 +379,17 @@ so GC on any ancestor volume can find the full set of dependents.
 ### Listing forks of a volume
 
 ```bash
-juicefs fork list <src-meta>
-# reads <srcName>/_forks/ from bucket, prints lease metadata for each fork
+juicefs fork list <any-peer-meta>
+# reads <volumeName>/_forks/ from bucket, prints lease metadata for each fork
+# can be run from any volume sharing the bucket — source, fork, or fork-of-fork
 ```
 
 ### Destroying a fork safely
 
 ```bash
-juicefs destroy <fork-meta>           # destroys fork metadata + objects under forkName/
-# then:
-juicefs fork release <src-meta> <forkUUID>   # removes the lease from the bucket
+juicefs destroy <fork-meta>                            # destroys fork metadata + objects under forkName/
+# then release the lease from any peer sharing the bucket:
+juicefs fork release <any-peer-meta> --fork-name <name>  # removes the lease from the bucket
 ```
 
 Releasing the lease without destroying the fork first leaves orphaned objects but does

@@ -143,7 +143,7 @@ func destroy(ctx *cli.Context) error {
 		}
 		logger.Infof("Fork metadata has been destroyed. You may need to delete cache directory manually.")
 		logger.Infof("Note: shared objects in %s are still intact (owned by the source volume).", blob)
-		logger.Infof("Run 'juicefs fork release' on the source volume to remove the fork lease.")
+		logger.Infof("Run 'juicefs fork release' on any peer sharing the bucket to remove the fork lease.")
 		return nil
 	}
 

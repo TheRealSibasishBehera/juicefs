@@ -100,21 +100,23 @@ func gc(ctx *cli.Context) error {
 	logger.Infof("Data use %s", blob)
 
 	// Determine the effective fork protection threshold.
-	// Two sources: (1) the metadata DB's forkProtectBelow counter (loaded by
-	// NewSession above — covers fork-of-fork scenarios where the source is
-	// itself a fork and must protect its own post-fork chunks for its children)
-	// and (2) active fork leases in the bucket (authoritative for live leases).
-	// We take the MAXIMUM so protection only ever increases.
+	// The bucket's fork leases are the authoritative source of truth.
+	// DB counters (forkProtectBelow/forkProtectCleared/forkProtectRearm) are
+	// a fast cache used only as a fallback when the bucket is unreachable.
+	//
+	// This ensures "no master/slave" semantics: any peer that shares the
+	// bucket can release leases, and GC on every peer will observe the
+	// change without needing writes to each individual metadata DB.
 	dbThreshold, _ := m.GetCounter("forkProtectBelow")
 	dbCleared, _ := m.GetCounter("forkProtectCleared")
 	dbRearm, _ := m.GetCounter("forkProtectRearm")
 	var gcForkProtect uint64
-	// Protection is active unless cleared>0 AND no rearm since (rearm<=cleared).
-	if dbThreshold > 0 && !(dbCleared > 0 && dbRearm <= dbCleared) {
-		gcForkProtect = uint64(dbThreshold)
-	}
 	if minBase, maxBase, hasLeases, leaseErr := LoadForkLeaseInfo(ctx.Context, blob, format.Name); leaseErr != nil {
-		logger.Warnf("check fork leases: %v — proceeding without fork protection", leaseErr)
+		// Bucket unreachable — fall back to DB counters (conservative).
+		logger.Warnf("check fork leases: %v — falling back to DB counters for fork protection", leaseErr)
+		if dbThreshold > 0 && !(dbCleared > 0 && dbRearm <= dbCleared) {
+			gcForkProtect = uint64(dbThreshold)
+		}
 	} else if hasLeases {
 		// Use minBase for the metadata-deletion guard (SetForkProtect) so live
 		// mounts only protect what their own fork tree requires.
@@ -127,6 +129,7 @@ func gc(ctx *cli.Context) error {
 			gcForkProtect = uint64(maxBase)
 		}
 	}
+	// else: bucket reachable, no leases → gcForkProtect stays 0 (no protection)
 	if gcForkProtect > 0 {
 		logger.Infof("Fork protection active: protecting objects with chunk id <= %d from deletion", gcForkProtect)
 		m.SetForkProtect(gcForkProtect)
