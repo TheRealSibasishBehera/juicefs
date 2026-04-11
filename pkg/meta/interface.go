@@ -57,6 +57,8 @@ const (
 	OpSummary = 1007
 	// CompactPath is a message to trigger compact
 	CompactPath = 1008
+	// FlushAll is a message to flush all buffered writes to object storage and metadata DB.
+	FlushAll = 1009
 )
 
 const (

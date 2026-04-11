@@ -207,6 +207,14 @@ Examples:
 				Value: true,
 				Usage: "keep secret keys intact in dump file (for 'dump' subcommand)",
 			},
+			&cli.StringFlag{
+				Name:  "mountpoint",
+				Usage: "path where the source volume is mounted; flush buffered writes before forking (for 'create'/'dump' subcommands)",
+			},
+			&cli.BoolFlag{
+				Name:  "force",
+				Usage: "skip mounted-volume check — fork may capture incomplete data if writes are in flight",
+			},
 		},
 	}
 }
@@ -280,6 +288,15 @@ func forkCreate(ctx *cli.Context) error {
 			return fmt.Errorf("a fork named %q already exists under volume %s (UUID %s); choose a different --name",
 				forkName, srcFormat.Name, l.ForkUUID)
 		}
+	}
+
+	// 5b. Flush buffered writes if the source volume is mounted.
+	if mp := forkStringFlag(ctx, "mountpoint"); mp != "" {
+		logger.Infof("Flushing buffered writes at %s before forking...", mp)
+		if err := flushViaMountpoint(mp); err != nil {
+			return fmt.Errorf("flush mountpoint before fork: %w", err)
+		}
+		logger.Infof("Flush completed")
 	}
 
 	// 6. Dump source metadata and load into destination (pipe, no temp file)
@@ -445,6 +462,15 @@ func forkDump(ctx *cli.Context) (err error) {
 	}()
 
 	persistSourceForkProtection(srcMeta, forkBaseChunk)
+
+	// Flush buffered writes if the source volume is mounted.
+	if mp := forkStringFlag(ctx, "mountpoint"); mp != "" {
+		logger.Infof("Flushing buffered writes at %s before fork dump...", mp)
+		if err := flushViaMountpoint(mp); err != nil {
+			return fmt.Errorf("flush mountpoint before fork dump: %w", err)
+		}
+		logger.Infof("Flush completed")
+	}
 
 	if err := dumpMeta(srcMeta, dumpPath, threads, forkBoolFlag(ctx, "keep-secret-key"), false, false, isBinary); err != nil {
 		return fmt.Errorf("dump metadata to %s: %w", dumpPath, err)

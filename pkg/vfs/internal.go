@@ -575,6 +575,15 @@ func (v *VFS) handleInternalMsg(ctx meta.Context, cmd uint32, r *utils.Buffer, o
 		w.Put32(uint32(len(data)))
 		w.Put(data)
 		_, _ = out.Write(w.Bytes())
+	case meta.FlushAll:
+		logger.Infof("Start to flush all buffered writes")
+		if err := v.writer.FlushAll(); err != nil {
+			logger.Errorf("flush all: %s", err)
+			_, _ = out.Write([]byte{uint8(syscall.EIO)})
+			return
+		}
+		logger.Infof("Flush all completed")
+		_, _ = out.Write([]byte{0})
 	default:
 		logger.Warnf("unknown message type: %d", cmd)
 		_, _ = out.Write([]byte{byte(syscall.EINVAL & 0xff)})
