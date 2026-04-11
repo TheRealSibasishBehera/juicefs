@@ -61,6 +61,8 @@ juicefs fork create <SRC-META-URL> <DST-META-URL> [flags]
 |------|---------|-------------|
 | `--name` | `<src>-fork-<uuid8>` | Human-readable name for this fork. Must be unique among active forks of the source. |
 | `--threads` | `10` | Threads used for the internal metadata dump/load pipe. |
+| `--mountpoint` | (none) | If the source volume is mounted, pass the mount path to flush all buffered writes before forking. Without this flag, data written by applications that have not called `fsync` may be missing from the fork. |
+| `--force` | `false` | Skip mounted-volume check — fork may capture incomplete data if writes are in flight. |
 
 **What it does:**
 
@@ -87,6 +89,8 @@ juicefs fork dump <SRC-META-URL> --path <DUMP-FILE> [flags]
 | `--threads` | `10` | Threads used for metadata dump. |
 | `--binary` | `false` | Dump metadata in binary format instead of JSON. |
 | `--keep-secret-key` | `true` | Keep object-storage secrets in the dump. |
+| `--mountpoint` | (none) | If the source volume is mounted, flush buffered writes before dumping. |
+| `--force` | `false` | Skip mounted-volume check. |
 
 **What it does:**
 
@@ -298,3 +302,78 @@ The safety comes from the **lease object** written to the shared bucket at fork 
 - **Concurrent fork creation** from the same source at the exact same moment may produce the same fork index. Avoid running `juicefs fork` twice simultaneously against the same source.
 - **Plain `dump`/`load`** (not `fork dump`/`fork load`) produces a standalone volume without fork leases and `forkSharedStorage` sentinel. Treat it as a new independent volume and manage object storage separately.
 - **No automatic sync.** A fork is a point-in-time snapshot; changes on the source after the fork point are not propagated to the fork, and vice versa.
+
+## Flushing before fork
+
+When a volume is mounted and applications are writing to it, some data may still be in the mount process's in-memory write buffer — not yet committed to the metadata database. Fork reads the metadata database directly, so **unflushed writes are silently missing from the fork**.
+
+To capture all written data, pass `--mountpoint` when forking a mounted volume:
+
+```shell
+# Fork a mounted volume — flushes write buffer before dumping metadata
+juicefs fork redis://src/1 redis://dst/2 --name checkpoint --mountpoint /mnt/jfs
+
+# Deferred dump — same flag
+juicefs fork dump redis://src/1 --path /tmp/dump --mountpoint /mnt/jfs
+```
+
+The `--mountpoint` flag sends a `FlushAll` command to the running mount process via its control socket (`.jfs.control`). This drains all buffered writes to object storage and commits their metadata before the fork reads the database. The mount continues serving normally after the flush.
+
+If the volume is not mounted (offline fork from a backup, or the mount is on a different node), omit `--mountpoint` — the metadata database is the only source of truth and no flush is needed.
+
+### `juicefs flush`
+
+You can also flush independently of fork:
+
+```shell
+juicefs flush /mnt/jfs
+```
+
+This is useful for scripting, pre-snapshot workflows, or verifying that all writes have been persisted before taking a backup.
+
+## Write fencing
+
+When multiple nodes can mount the same volume (e.g., during a rescue scenario where the old node may still be alive), you can enable a write fence that blocks writes for specific mount sessions via a sentinel object in the bucket.
+
+### Configuration
+
+Set these environment variables when mounting:
+
+| Env var | Required | Default | Description |
+|---|---|---|---|
+| `JFS_FENCE_KEY` | Yes (to enable) | (disabled) | Object key for the sentinel, relative to the volume prefix (e.g., `_fence`). |
+| `JFS_FENCE_SESSION` | No | `<volname>-<pid>` | A unique identifier for this mount, assigned by the orchestration layer. |
+| `JFS_FENCE_INTERVAL` | No | `5s` | How often to poll the sentinel object. |
+
+Example:
+
+```shell
+JFS_FENCE_KEY="_fence" \
+JFS_FENCE_SESSION="machine-uuid-abc" \
+JFS_FENCE_INTERVAL="5s" \
+  juicefs mount sqlite3:///data/meta.db /mnt/jfs
+```
+
+### Sentinel object
+
+The fence state is controlled by a JSON object in the volume's bucket:
+
+```json
+{
+  "generation": 1,
+  "fenced_sessions": ["machine-uuid-abc"]
+}
+```
+
+- `fenced_sessions`: mount sessions listed here are blocked from writing. Sessions not listed can write freely. An empty list or absent object means no one is fenced.
+- `generation`: incremented on each change, logged for debugging.
+
+Write this object from your control plane to fence a node. Remove the session from the list (or delete the object) to unfence it. The mount detects the change within `JFS_FENCE_INTERVAL`.
+
+### Behavior
+
+- **Writes** (`Put`, `Delete`, `Copy`) are blocked immediately with `EROFS` when fenced.
+- **Reads** always pass through — the mount stays alive and the filesystem is browsable.
+- **Resumable** — removing the session from the sentinel re-enables writes automatically.
+- **Fail-open** — if the sentinel can't be read (object doesn't exist, storage unreachable), the mount is NOT fenced. If the mount can't reach storage to read the sentinel, it also can't reach storage to write data, so this is safe.
+- **Per-volume** — each volume has its own sentinel at its own object prefix. Fencing volume X does not affect volume Y (including forks).

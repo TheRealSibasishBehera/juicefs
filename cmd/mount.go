@@ -658,6 +658,24 @@ func mount(c *cli.Context) error {
 	// Wrap the default registry, all prometheus.MustRegister() calls should be afterwards
 	registerer, registry := wrapRegister(c, mp, format.Name)
 
+	// Wrap with fence checking if configured.
+	var fencedBlob *object.FencedStorage
+	if fenceKey := os.Getenv("JFS_FENCE_KEY"); fenceKey != "" {
+		sessionID := os.Getenv("JFS_FENCE_SESSION")
+		if sessionID == "" {
+			sessionID = fmt.Sprintf("%s-%d", format.Name, os.Getpid())
+		}
+		interval := 5 * time.Second
+		if v := os.Getenv("JFS_FENCE_INTERVAL"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil && d > 0 {
+				interval = d
+			}
+		}
+		fencedBlob = object.NewFencedStorage(blob, sessionID, fenceKey, interval)
+		blob = fencedBlob
+		logger.Infof("Fence watchdog enabled: key=%s session=%s interval=%s", fenceKey, sessionID, interval)
+	}
+
 	store := chunk.NewCachedStore(blob, *chunkConf, registerer)
 	registerMetaMsg(metaCli, store, chunkConf)
 
@@ -675,6 +693,9 @@ func mount(c *cli.Context) error {
 	v.UpdateFormat = updateFormat(c)
 	initBackgroundTasks(c, vfsConf, metaConf, metaCli, blob, registerer, registry)
 	mountMain(v, c)
+	if fencedBlob != nil {
+		fencedBlob.Stop()
+	}
 	if err := v.FlushAll(""); err != nil {
 		logger.Errorf("flush all delayed data: %s", err)
 	}

@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/juicedata/juicefs/pkg/compress"
@@ -385,6 +386,10 @@ func (store *cachedStore) upload(key string, block *Page, s *wSlice) error {
 			break
 		}
 		if err = store.put(key, buf); err == nil {
+			break
+		}
+		if errors.Is(err, syscall.EROFS) {
+			// Non-retryable: storage is fenced (read-only). Fail immediately.
 			break
 		}
 		logger.Debugf("Upload %s: %s (try %d)", key, err, try+1)
