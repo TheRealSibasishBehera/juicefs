@@ -330,7 +330,19 @@ func forkCreate(ctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("read destination format after load: %w", err)
 	}
+	// DumpMeta strips credentials for safety, so dstFormat has empty SecretKey/EncryptKey/SessionToken.
+	// srcFormat was loaded with Load(true) which decrypts credentials in-place.
+	// Copy plaintext credentials from srcFormat and re-encrypt under the new fork UUID.
+	dstFormat.SecretKey = srcFormat.SecretKey
+	dstFormat.EncryptKey = srcFormat.EncryptKey
+	dstFormat.SessionToken = srcFormat.SessionToken
+	dstFormat.KeyEncrypted = false
 	dstFormat.UUID = forkUUID
+	if dstFormat.SecretKey != "" || dstFormat.EncryptKey != "" || dstFormat.SessionToken != "" {
+		if err := dstFormat.Encrypt(); err != nil {
+			return fmt.Errorf("re-encrypt credentials with fork UUID: %w", err)
+		}
+	}
 	if err := dstMeta.Init(dstFormat, true /* force overwrite */); err != nil {
 		return fmt.Errorf("patch destination format: %w", err)
 	}
@@ -568,7 +580,20 @@ func forkLoad(ctx *cli.Context) (err error) {
 	if err != nil {
 		return fmt.Errorf("read destination format after load: %w", err)
 	}
-	dstFormat.UUID = manifest.ForkUUID
+	if dstFormat.KeyEncrypted {
+		srcUUIDFormat := *dstFormat
+		srcUUIDFormat.UUID = manifest.SourceUUID
+		if err := srcUUIDFormat.Decrypt(); err != nil {
+			return fmt.Errorf("decrypt credentials with source UUID: %w", err)
+		}
+		srcUUIDFormat.UUID = manifest.ForkUUID
+		if err := srcUUIDFormat.Encrypt(); err != nil {
+			return fmt.Errorf("re-encrypt credentials with fork UUID: %w", err)
+		}
+		dstFormat = &srcUUIDFormat
+	} else {
+		dstFormat.UUID = manifest.ForkUUID
+	}
 	if err := dstMeta.Init(dstFormat, true /* force overwrite */); err != nil {
 		return fmt.Errorf("patch destination format: %w", err)
 	}
