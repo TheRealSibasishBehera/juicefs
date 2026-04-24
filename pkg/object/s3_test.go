@@ -19,6 +19,7 @@ package object
 import (
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -39,6 +40,53 @@ func Test_s3client_full_string(t *testing.T) {
 				t.Fatalf("newS3() error = %v", err)
 			}
 			assert.Equalf(t, tt.want, stor.String(), "Display full address of s3 compatible object storage")
+		})
+	}
+}
+
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/dual-stack-endpoints.html
+func TestDualstackEndpointPreserved(t *testing.T) {
+	cases := []struct {
+		name        string
+		endpoint    string
+		wantEnabled bool
+		wantRegion  string
+	}{
+		{
+			name:        "virtual-hosted dualstack",
+			endpoint:    "https://my-bucket.s3.dualstack.eu-north-1.amazonaws.com",
+			wantEnabled: true,
+			wantRegion:  "eu-north-1",
+		},
+		{
+			name:        "path-style dualstack",
+			endpoint:    "https://s3.dualstack.eu-north-1.amazonaws.com/my-bucket",
+			wantEnabled: true,
+			wantRegion:  "eu-north-1",
+		},
+		{
+			name:        "standard virtual-hosted (no dualstack)",
+			endpoint:    "https://my-bucket.s3.us-east-2.amazonaws.com",
+			wantEnabled: false,
+			wantRegion:  "us-east-2",
+		},
+		{
+			name:        "standard path-style (no dualstack)",
+			endpoint:    "https://s3.us-east-2.amazonaws.com/my-bucket",
+			wantEnabled: false,
+			wantRegion:  "us-east-2",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stor, err := newS3(tc.endpoint, "", "", "")
+			if err != nil {
+				t.Fatalf("newS3() error = %v", err)
+			}
+			opts := stor.(*s3client).s3.Options()
+			gotEnabled := opts.EndpointOptions.UseDualStackEndpoint == aws.DualStackEndpointStateEnabled
+			assert.Equalf(t, tc.wantEnabled, gotEnabled, "UseDualStackEndpoint flag")
+			assert.Equalf(t, tc.wantRegion, opts.Region, "region")
 		})
 	}
 }

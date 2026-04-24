@@ -458,6 +458,11 @@ func newS3(endpoint, accessKey, secretKey, token string) (ObjectStorage, error) 
 	if err != nil {
 		return nil, fmt.Errorf("Invalid endpoint %s: %s", endpoint, err.Error())
 	}
+	// https://docs.aws.amazon.com/AmazonS3/latest/userguide/dual-stack-endpoints.html
+	useDualstack := strings.Contains(uri.Host, ".s3.dualstack.") ||
+		strings.Contains(uri.Host, ".s3-dualstack.") ||
+		strings.HasPrefix(uri.Host, "s3.dualstack.") ||
+		strings.HasPrefix(uri.Host, "s3-dualstack.")
 
 	var (
 		bucketName string
@@ -543,6 +548,9 @@ func newS3(endpoint, accessKey, secretKey, token string) (ObjectStorage, error) 
 			return v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware(stack)
 		})
 		options.RetryMaxAttempts = 1
+		if useDualstack {
+			options.EndpointOptions.UseDualStackEndpoint = aws.DualStackEndpointStateEnabled
+		}
 	})
 
 	disable100Continue := strings.EqualFold(uri.Query().Get("disable-100-continue"), "true")
