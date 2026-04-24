@@ -22,7 +22,85 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juicedata/juicefs/pkg/meta"
 )
+
+// TestRewrapCredentials verifies that source credentials, sealed under the
+// source UUID, end up decryptable under the fork UUID after rewrap — and
+// that the recovered plaintext matches the original.
+//
+// Regression: an earlier implementation copied srcFormat.SecretKey (still
+// ciphertext — Load() does not decrypt) into dstFormat and called Encrypt().
+// That produced a double-sealed blob; the fork mount could not unwrap it, so
+// every chunk GET failed with SignatureDoesNotMatch.
+func TestRewrapCredentials(t *testing.T) {
+	const plainSecret = "F/GHRL3VF1woj/gUJjgMmZUvZoYDmAARjQs82+C1"
+	const plainEncrypt = "encrypt-key-plaintext"
+	const plainSession = "session-token-plaintext"
+	const srcUUID = "11111111-1111-1111-1111-111111111111"
+	const forkUUID = "22222222-2222-2222-2222-222222222222"
+
+	src := &meta.Format{
+		Name:         "src",
+		UUID:         srcUUID,
+		SecretKey:    plainSecret,
+		EncryptKey:   plainEncrypt,
+		SessionToken: plainSession,
+	}
+	if err := src.Encrypt(); err != nil {
+		t.Fatalf("seal source: %v", err)
+	}
+	if !src.KeyEncrypted {
+		t.Fatal("source not marked KeyEncrypted after Encrypt")
+	}
+	srcSealedLen := len(src.SecretKey)
+
+	// Mimic what forkCreate sees: dstFormat comes from Load() after LoadMeta,
+	// whose DumpMeta set SecretKey="removed".
+	dst := &meta.Format{
+		Name:         "src", // fork keeps the source Name (shared prefix)
+		UUID:         "placeholder-to-be-overwritten",
+		SecretKey:    "removed",
+		EncryptKey:   "removed",
+		SessionToken: "removed",
+		KeyEncrypted: true,
+	}
+
+	if err := rewrapCredentials(src, dst, forkUUID); err != nil {
+		t.Fatalf("rewrapCredentials: %v", err)
+	}
+
+	if dst.UUID != forkUUID {
+		t.Fatalf("dst.UUID: want %q, got %q", forkUUID, dst.UUID)
+	}
+	if !dst.KeyEncrypted {
+		t.Fatal("dst not marked KeyEncrypted after rewrap")
+	}
+	if dst.SecretKey == src.SecretKey {
+		t.Fatal("dst.SecretKey identical to src.SecretKey — not resealed")
+	}
+	// A correctly-sealed dst has the same ciphertext length as src (same
+	// plaintext, same GCM overhead).  A double-sealed dst is ~68 bytes
+	// larger (base64 of 12-byte nonce + ciphertext + 16-byte tag).
+	if len(dst.SecretKey) > srcSealedLen+10 {
+		t.Fatalf("dst.SecretKey length %d > src length %d + 10: looks double-encrypted",
+			len(dst.SecretKey), srcSealedLen)
+	}
+
+	if err := dst.Decrypt(); err != nil {
+		t.Fatalf("decrypt dst under fork UUID: %v", err)
+	}
+	if dst.SecretKey != plainSecret {
+		t.Fatalf("decrypted SecretKey: want %q, got %q", plainSecret, dst.SecretKey)
+	}
+	if dst.EncryptKey != plainEncrypt {
+		t.Fatalf("decrypted EncryptKey: want %q, got %q", plainEncrypt, dst.EncryptKey)
+	}
+	if dst.SessionToken != plainSession {
+		t.Fatalf("decrypted SessionToken: want %q, got %q", plainSession, dst.SessionToken)
+	}
+}
 
 func TestForkManifestRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "meta.dump.fork.json")

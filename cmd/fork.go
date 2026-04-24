@@ -330,18 +330,11 @@ func forkCreate(ctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("read destination format after load: %w", err)
 	}
-	// DumpMeta strips credentials for safety, so dstFormat has empty SecretKey/EncryptKey/SessionToken.
-	// srcFormat was loaded with Load(true) which decrypts credentials in-place.
-	// Copy plaintext credentials from srcFormat and re-encrypt under the new fork UUID.
-	dstFormat.SecretKey = srcFormat.SecretKey
-	dstFormat.EncryptKey = srcFormat.EncryptKey
-	dstFormat.SessionToken = srcFormat.SessionToken
-	dstFormat.KeyEncrypted = false
-	dstFormat.UUID = forkUUID
-	if dstFormat.SecretKey != "" || dstFormat.EncryptKey != "" || dstFormat.SessionToken != "" {
-		if err := dstFormat.Encrypt(); err != nil {
-			return fmt.Errorf("re-encrypt credentials with fork UUID: %w", err)
-		}
+	// DumpMeta writes SecretKey="removed" into the dump, so dstFormat has that
+	// sentinel instead of the real ciphertext.  Rewrap source credentials under
+	// the fork UUID so the fork can decrypt them at mount time.
+	if err := rewrapCredentials(srcFormat, dstFormat, forkUUID); err != nil {
+		return err
 	}
 	if err := dstMeta.Init(dstFormat, true /* force overwrite */); err != nil {
 		return fmt.Errorf("patch destination format: %w", err)
@@ -626,6 +619,38 @@ func forkLoad(ctx *cli.Context) (err error) {
 	logger.Infof("  BaseChunk:   %d  →  fork starts at %d", manifest.ForkBaseChunk, newNextChunk)
 	logger.Infof("  BaseInode:   %d  →  fork starts at %d", manifest.ForkBaseInode, newNextInode)
 	logger.Infof("Mount the fork with: juicefs mount %s <mountpoint>", utils.RemovePassword(dstURI))
+	return nil
+}
+
+// rewrapCredentials decrypts srcFormat credentials under the source UUID,
+// copies them into dstFormat, and re-seals them under forkUUID.  dstFormat's
+// UUID is set to forkUUID as a side-effect.
+//
+// Load() does not decrypt: srcFormat.SecretKey is still the ciphertext sealed
+// under the source UUID.  Copying it straight into dstFormat and calling
+// Encrypt() would double-encrypt, producing a ciphertext the fork mount
+// cannot decrypt — chunk GETs then fail with SignatureDoesNotMatch.
+func rewrapCredentials(srcFormat, dstFormat *meta.Format, forkUUID string) error {
+	if srcFormat.KeyEncrypted {
+		srcCopy := *srcFormat
+		if err := srcCopy.Decrypt(); err != nil {
+			return fmt.Errorf("decrypt source credentials: %w", err)
+		}
+		dstFormat.SecretKey = srcCopy.SecretKey
+		dstFormat.EncryptKey = srcCopy.EncryptKey
+		dstFormat.SessionToken = srcCopy.SessionToken
+	} else {
+		dstFormat.SecretKey = srcFormat.SecretKey
+		dstFormat.EncryptKey = srcFormat.EncryptKey
+		dstFormat.SessionToken = srcFormat.SessionToken
+	}
+	dstFormat.KeyEncrypted = false
+	dstFormat.UUID = forkUUID
+	if dstFormat.SecretKey != "" || dstFormat.EncryptKey != "" || dstFormat.SessionToken != "" {
+		if err := dstFormat.Encrypt(); err != nil {
+			return fmt.Errorf("re-encrypt credentials with fork UUID: %w", err)
+		}
+	}
 	return nil
 }
 
